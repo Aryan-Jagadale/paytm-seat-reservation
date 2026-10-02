@@ -57,19 +57,19 @@ func run() error {
 	defer pool.Close()
 
 	showRepo := repository.NewShowRepository(pool)
-	appMetrics := metrics.New();
+	appMetrics := metrics.New()
 
 	showService := service.NewShowService(showRepo)
 	showHandler := apphttp.NewShowHandler(showService)
 
 	reservationRepo := repository.NewReservationRepository(pool)
 	reservationService := service.NewReservationService(reservationRepo)
-	reservationHandler := apphttp.NewReservationHandler(reservationService,appMetrics)
+	reservationHandler := apphttp.NewReservationHandler(reservationService, appMetrics, logger)
 
 	authenticator := auth.NewJWTAuthenticator(cfg.AuthJWTSecret)
 
 	ready := apphealth.NewChecker(pool, time.Second)
-	router := apphttp.NewRouter(ready, logger, showHandler, reservationHandler,showService ,authenticator, appMetrics)
+	router := apphttp.NewRouter(ready, logger, showHandler, reservationHandler, showService, authenticator, appMetrics)
 
 	server := &http.Server{
 		Addr:              net.JoinHostPort("0.0.0.0", cfg.Port),

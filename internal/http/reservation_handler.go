@@ -2,6 +2,7 @@ package http
 
 import (
 	"errors"
+	"log/slog"
 	"net/http"
 
 	"github.com/Aryan-Jagadale/paytm-seat-reservation/internal/domain"
@@ -14,12 +15,18 @@ import (
 type ReservationHandler struct {
 	service *service.ReservationService
 	metrics *metrics.Metrics
+	logger  *slog.Logger
 }
 
-func NewReservationHandler(service *service.ReservationService, appMetrics *metrics.Metrics) *ReservationHandler {
+func NewReservationHandler(
+	service *service.ReservationService,
+	appMetrics *metrics.Metrics,
+	logger *slog.Logger,
+) *ReservationHandler {
 	return &ReservationHandler{
 		service: service,
 		metrics: appMetrics,
+		logger:  logger,
 	}
 }
 
@@ -39,11 +46,9 @@ type reservationResponse struct {
 }
 
 func (h *ReservationHandler) Reserve(c *gin.Context) {
-
 	showID := c.Param("id")
 
 	userID, ok := middleware.GetUserID(c)
-
 	if !ok {
 		c.JSON(http.StatusUnauthorized, gin.H{
 			"error": "authentication_required",
@@ -76,6 +81,18 @@ func (h *ReservationHandler) Reserve(c *gin.Context) {
 			h.metrics.ReservationsDeclined.
 				WithLabelValues("seat_taken").
 				Inc()
+
+			h.logger.Warn(
+				"reservation declined",
+				slog.String(
+					"request_id",
+					middleware.RequestIDFromContext(c.Request.Context()),
+				),
+				slog.String("show_id", showID),
+				slog.String("user_id", userID),
+				slog.String("reason", "seat_taken"),
+			)
+
 			c.JSON(http.StatusConflict, gin.H{
 				"error": "seat_taken",
 			})
@@ -84,16 +101,50 @@ func (h *ReservationHandler) Reserve(c *gin.Context) {
 			h.metrics.ReservationsDeclined.
 				WithLabelValues("per_user_limit").
 				Inc()
+
+			h.logger.Warn(
+				"reservation declined",
+				slog.String(
+					"request_id",
+					middleware.RequestIDFromContext(c.Request.Context()),
+				),
+				slog.String("show_id", showID),
+				slog.String("user_id", userID),
+				slog.String("reason", "per_user_limit"),
+			)
+
 			c.JSON(http.StatusConflict, gin.H{
 				"error": "per_user_limit",
 			})
 
 		case errors.Is(err, domain.ErrIdempotencyConflict):
+			h.logger.Warn(
+				"reservation declined",
+				slog.String(
+					"request_id",
+					middleware.RequestIDFromContext(c.Request.Context()),
+				),
+				slog.String("show_id", showID),
+				slog.String("user_id", userID),
+				slog.String("reason", "idempotency_conflict"),
+			)
+
 			c.JSON(http.StatusConflict, gin.H{
 				"error": "idempotency_key_reused_with_different_seats",
 			})
 
 		default:
+			h.logger.Error(
+				"reservation request failed",
+				slog.String(
+					"request_id",
+					middleware.RequestIDFromContext(c.Request.Context()),
+				),
+				slog.String("show_id", showID),
+				slog.String("user_id", userID),
+				slog.String("error", err.Error()),
+			)
+
 			c.JSON(http.StatusBadRequest, gin.H{
 				"error": err.Error(),
 			})
@@ -108,8 +159,30 @@ func (h *ReservationHandler) Reserve(c *gin.Context) {
 		h.metrics.ReservationsDeclined.
 			WithLabelValues("idempotent_replay").
 			Inc()
+
+		h.logger.Info(
+			"reservation replayed",
+			slog.String(
+				"request_id",
+				middleware.RequestIDFromContext(c.Request.Context()),
+			),
+			slog.String("reservation_id", reservation.ID),
+			slog.String("show_id", reservation.ShowID),
+			slog.String("user_id", reservation.UserID),
+		)
 	} else {
 		h.metrics.ReservationsConfirmed.Inc()
+
+		h.logger.Info(
+			"reservation confirmed",
+			slog.String(
+				"request_id",
+				middleware.RequestIDFromContext(c.Request.Context()),
+			),
+			slog.String("reservation_id", reservation.ID),
+			slog.String("show_id", reservation.ShowID),
+			slog.String("user_id", reservation.UserID),
+		)
 	}
 
 	seats := make([]string, 0, len(reservation.Seats))
@@ -139,7 +212,6 @@ func (h *ReservationHandler) Cancel(c *gin.Context) {
 	reservationID := c.Param("id")
 
 	userID, ok := middleware.GetUserID(c)
-
 	if !ok {
 		c.JSON(http.StatusUnauthorized, gin.H{
 			"error": "authentication_required",
@@ -166,12 +238,34 @@ func (h *ReservationHandler) Cancel(c *gin.Context) {
 			})
 
 		default:
+			h.logger.Error(
+				"reservation cancellation failed",
+				slog.String(
+					"request_id",
+					middleware.RequestIDFromContext(c.Request.Context()),
+				),
+				slog.String("reservation_id", reservationID),
+				slog.String("user_id", userID),
+				slog.String("error", err.Error()),
+			)
+
 			c.JSON(http.StatusConflict, gin.H{
 				"error": err.Error(),
 			})
 		}
+
 		return
 	}
+
+	h.logger.Info(
+		"reservation cancelled",
+		slog.String(
+			"request_id",
+			middleware.RequestIDFromContext(c.Request.Context()),
+		),
+		slog.String("reservation_id", reservationID),
+		slog.String("user_id", userID),
+	)
 
 	c.JSON(http.StatusOK, gin.H{
 		"message": "reservation_cancelled",

@@ -11,8 +11,8 @@ import (
 	"github.com/Aryan-Jagadale/paytm-seat-reservation/internal/auth"
 	"github.com/Aryan-Jagadale/paytm-seat-reservation/internal/metrics"
 	"github.com/Aryan-Jagadale/paytm-seat-reservation/internal/middleware"
-	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/Aryan-Jagadale/paytm-seat-reservation/internal/service"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 type ReadyChecker interface {
@@ -24,17 +24,17 @@ type Handler struct {
 	logger *slog.Logger
 }
 
-func NewRouter(ready ReadyChecker, logger *slog.Logger, showHandler *ShowHandler, reservationHandler *ReservationHandler, showService *service.ShowService ,authenticator *auth.JWTAuthenticator, appMetrics *metrics.Metrics) *gin.Engine {
+func NewRouter(ready ReadyChecker, logger *slog.Logger, showHandler *ShowHandler, reservationHandler *ReservationHandler, showService *service.ShowService, authenticator *auth.JWTAuthenticator, appMetrics *metrics.Metrics) *gin.Engine {
 	gin.SetMode(gin.ReleaseMode)
 
 	router := gin.New()
 
-	protected := router.Group("")
-	protected.Use(middleware.Authentication(authenticator))
-
 	router.Use(middleware.RequestID())
 	router.Use(middleware.Recovery(logger))
 	router.Use(middleware.AccessLog(logger))
+
+	protected := router.Group("")
+	protected.Use(middleware.Authentication(authenticator))
 
 	handler := &Handler{
 		ready:  ready,
@@ -47,23 +47,22 @@ func NewRouter(ready ReadyChecker, logger *slog.Logger, showHandler *ShowHandler
 	router.POST("/shows", showHandler.CreateShow)
 	router.GET("/shows/:id", showHandler.GetShow)
 
-
 	router.GET("/metrics", func(c *gin.Context) {
-	if err := appMetrics.RefreshSeatsAvailable(
-		c.Request.Context(),
-		showService,
-	); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"error": "failed to refresh metrics",
-		})
-		return
-	}
+		if err := appMetrics.RefreshSeatsAvailable(
+			c.Request.Context(),
+			showService,
+		); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"error": "failed to refresh metrics",
+			})
+			return
+		}
 
-	promhttp.HandlerFor(
-		appMetrics.Registry,
-		promhttp.HandlerOpts{},
-	).ServeHTTP(c.Writer, c.Request)
-})
+		promhttp.HandlerFor(
+			appMetrics.Registry,
+			promhttp.HandlerOpts{},
+		).ServeHTTP(c.Writer, c.Request)
+	})
 
 	protected.POST("/shows/:id/reserve", reservationHandler.Reserve)
 	protected.POST("/reservations/:id/cancel", reservationHandler.Cancel)

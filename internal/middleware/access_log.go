@@ -13,13 +13,25 @@ func AccessLog(logger *slog.Logger) gin.HandlerFunc {
 
         c.Next()
 
-        logger.Info(
-            "http request",
+        status := c.Writer.Status()
+        latency := time.Since(start)
+
+        attrs := []any{
             slog.String("request_id", RequestIDFromContext(c.Request.Context())),
             slog.String("method", c.Request.Method),
             slog.String("path", c.Request.URL.Path),
-            slog.Int("status", c.Writer.Status()),
-            slog.Duration("latency", time.Since(start)),
-        )
+            slog.Int("status", status),
+            slog.Duration("latency", latency),
+            slog.Int("bytes_written", c.Writer.Size()),
+        }
+
+        switch {
+        case status >= 500:
+            logger.Error("http request", attrs...)
+        case status >= 400:
+            logger.Warn("http request", attrs...)
+        default:
+            logger.Info("http request", attrs...)
+        }
     }
 }
