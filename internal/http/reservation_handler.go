@@ -1,0 +1,110 @@
+package http
+
+import (
+	"errors"
+	"net/http"
+
+	"github.com/Aryan-Jagadale/paytm-seat-reservation/internal/domain"
+	"github.com/Aryan-Jagadale/paytm-seat-reservation/internal/service"
+	"github.com/gin-gonic/gin"
+)
+
+type ReservationHandler struct {
+	service *service.ReservationService
+}
+
+func NewReservationHandler(service *service.ReservationService) *ReservationHandler {
+	return &ReservationHandler{
+		service: service,
+	}
+}
+
+type reserveRequest struct {
+	Seats          []string `json:"seats"`
+	IdempotencyKey string   `json:"idempotency_key"`
+}
+
+type reservationResponse struct {
+	ID             string   `json:"id"`
+	ShowID         string   `json:"show_id"`
+	UserID         string   `json:"user_id"`
+	Status         string   `json:"status"`
+	AmountPaise    int64    `json:"amount_paise"`
+	Seats          []string `json:"seats"`
+	IdempotencyKey string   `json:"idempotency_key"`
+}
+
+func (h *ReservationHandler) Reserve(c *gin.Context) {
+
+	showID := c.Param("id")
+
+	// Temporary identity until auth middleware is implemented.
+	userID := c.GetHeader("X-User-ID")
+
+	var req reserveRequest
+
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": "invalid request body",
+		})
+		return
+	}
+
+	reservation, err := h.service.Reserve(
+		c.Request.Context(),
+		service.ReserveRequest{
+			ShowID:         showID,
+			UserID:         userID,
+			Seats:          req.Seats,
+			IdempotencyKey: req.IdempotencyKey,
+		},
+	)
+
+	if err != nil {
+		switch {
+		case errors.Is(err, domain.ErrSeatUnavailable):
+			c.JSON(http.StatusConflict, gin.H{
+				"error": "seat_taken",
+			})
+
+		case errors.Is(err, domain.ErrPerUserLimitExceeded):
+			c.JSON(http.StatusConflict, gin.H{
+				"error": "per_user_limit",
+			})
+
+		case errors.Is(err, domain.ErrIdempotencyConflict):
+			c.JSON(http.StatusConflict, gin.H{
+				"error": "idempotency_key_reused_with_different_seats",
+			})
+
+		default:
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error": err.Error(),
+			})
+		}
+
+		return
+	}
+
+	seats := make([]string, 0, len(reservation.Seats))
+
+	for _, seat := range reservation.Seats {
+		seats = append(seats, seat.SeatNumber)
+	}
+
+	// Reservation.Seats isn't populated by repository yet.
+	// Return requested seats for now.
+	if len(seats) == 0 {
+		seats = req.Seats
+	}
+
+	c.JSON(http.StatusCreated, reservationResponse{
+		ID:             reservation.ID,
+		ShowID:         reservation.ShowID,
+		UserID:         reservation.UserID,
+		Status:         reservation.Status,
+		AmountPaise:    reservation.AmountPaise,
+		Seats:          seats,
+		IdempotencyKey: reservation.IdempotencyKey,
+	})
+}
