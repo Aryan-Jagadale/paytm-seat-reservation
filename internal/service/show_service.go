@@ -13,16 +13,14 @@ type ShowService struct {
 	repo *repository.ShowRepository
 }
 
+
 func NewShowService(repo *repository.ShowRepository) *ShowService {
 	return &ShowService{
 		repo: repo,
 	}
 }
 
-func (s *ShowService) CreateShow(
-	ctx context.Context,
-	show domain.Show,
-) (*domain.Show, error) {
+func (s *ShowService) CreateShow(ctx context.Context,show domain.Show,) (*domain.Show, error) {
 
 	
 	if strings.TrimSpace(show.Name) == "" {
@@ -66,4 +64,13 @@ func (s *ShowService) CreateShow(
 	}
 
 	return s.repo.CreateShow(ctx, show)
+}
+
+func (s *ShowService) GetShow( ctx context.Context,showID string,) (*domain.ShowDetails, error) {
+
+	if strings.TrimSpace(showID) == "" {
+		return nil, fmt.Errorf("show_id is required")
+	}
+
+	return s.repo.GetShow(ctx, showID)
 }

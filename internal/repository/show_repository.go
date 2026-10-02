@@ -2,8 +2,11 @@ package repository
 
 import (
 	"context"
+	"errors"
+	"fmt"
 
 	"github.com/Aryan-Jagadale/paytm-seat-reservation/internal/domain"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -67,6 +70,79 @@ func (r *ShowRepository) CreateShow(
 	
 	if err := tx.Commit(ctx); err != nil {
 		return nil, err
+	}
+
+	return &show, nil
+}
+
+
+func (r *ShowRepository) GetShow(ctx context.Context,showID string,) (*domain.ShowDetails, error) {
+
+	var show domain.ShowDetails
+
+	err := r.pool.QueryRow(
+		ctx,
+		`SELECT id, name, price_paise, per_user_limit
+		 FROM shows
+		 WHERE id = $1`,
+		showID,
+	).Scan(
+		&show.ID,
+		&show.Name,
+		&show.PricePaise,
+		&show.PerUserLimit,
+	)
+
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, domain.ErrShowNotFound
+		}
+
+		return nil, fmt.Errorf("get show: %w", err)
+	}
+
+	rows, err := r.pool.Query(
+		ctx,
+		`SELECT id, show_id, seat_number, status
+		 FROM seats
+		 WHERE show_id = $1
+		 ORDER BY seat_number`,
+		showID,
+	)
+
+	if err != nil {
+		return nil, fmt.Errorf("get show seats: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var seat domain.Seat
+
+		if err := rows.Scan(
+			&seat.ID,
+			&seat.ShowID,
+			&seat.SeatNumber,
+			&seat.Status,
+		); err != nil {
+			return nil, fmt.Errorf("scan show seat: %w", err)
+		}
+
+		show.Seats = append(show.Seats, seat)
+
+		show.Counts.Total++
+
+		switch seat.Status {
+		case "available":
+			show.Counts.Available++
+		case "held":
+			show.Counts.Held++
+		case "confirmed":
+			show.Counts.Confirmed++
+		}
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate show seats: %w", err)
 	}
 
 	return &show, nil
