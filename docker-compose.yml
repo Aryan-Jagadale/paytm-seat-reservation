@@ -1,0 +1,41 @@
+services:
+  postgres:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: seat_reservation
+      POSTGRES_USER: seat_user
+      POSTGRES_PASSWORD: local_password
+    ports:
+      - "15432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -U seat_user -d seat_reservation
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PORT: "8080"
+      DATABASE_URL: postgres://seat_user:local_password@postgres:5432/seat_reservation?sslmode=disable
+      MAX_CONNS: "10"
+      MIN_CONNS: "2"
+      DB_CONNECT_TIMEOUT: 5s
+      SHUTDOWN_TIMEOUT: 10s
+    ports:
+      - "8080:8080"
+
+volumes:
+  postgres_data:
