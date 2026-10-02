@@ -13,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/Aryan-Jagadale/paytm-seat-reservation/internal/auth"
 	appconfig "github.com/Aryan-Jagadale/paytm-seat-reservation/internal/config"
 	"github.com/Aryan-Jagadale/paytm-seat-reservation/internal/db"
 	apphealth "github.com/Aryan-Jagadale/paytm-seat-reservation/internal/health"
@@ -62,8 +63,10 @@ func run() error {
 	reservationService := service.NewReservationService(reservationRepo)
 	reservationHandler := apphttp.NewReservationHandler(reservationService)
 
+	authenticator := auth.NewJWTAuthenticator(cfg.AuthJWTSecret)
+
 	ready := apphealth.NewChecker(pool, time.Second)
-	router := apphttp.NewRouter(ready, logger, showHandler, reservationHandler)
+	router := apphttp.NewRouter(ready, logger, showHandler, reservationHandler, authenticator)
 
 	server := &http.Server{
 		Addr:              net.JoinHostPort("0.0.0.0", cfg.Port),

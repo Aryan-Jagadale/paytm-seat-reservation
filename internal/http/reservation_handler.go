@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"github.com/Aryan-Jagadale/paytm-seat-reservation/internal/domain"
+	"github.com/Aryan-Jagadale/paytm-seat-reservation/internal/middleware"
 	"github.com/Aryan-Jagadale/paytm-seat-reservation/internal/service"
 	"github.com/gin-gonic/gin"
 )
@@ -38,8 +39,14 @@ func (h *ReservationHandler) Reserve(c *gin.Context) {
 
 	showID := c.Param("id")
 
-	// Temporary identity until auth middleware is implemented.
-	userID := c.GetHeader("X-User-ID")
+	userID, ok := middleware.GetUserID(c)
+
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{
+			"error": "authentication_required",
+		})
+		return
+	}
 
 	var req reserveRequest
 
@@ -109,38 +116,45 @@ func (h *ReservationHandler) Reserve(c *gin.Context) {
 	})
 }
 
-
 func (h *ReservationHandler) Cancel(c *gin.Context) {
-    reservationID := c.Param("id")
-    userID := c.GetHeader("X-User-ID") // temporary identity
+	reservationID := c.Param("id")
 
-    err := h.service.Cancel(
-        c.Request.Context(),
-        reservationID,
-        userID,
-    )
+	userID, ok := middleware.GetUserID(c)
 
-    if err != nil {
-        switch {
-        case errors.Is(err, domain.ErrReservationNotFound):
-            c.JSON(http.StatusNotFound, gin.H{
-                "error": "reservation_not_found",
-            })
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{
+			"error": "authentication_required",
+		})
+		return
+	}
 
-        case errors.Is(err, domain.ErrNotReservationOwner):
-            c.JSON(http.StatusForbidden, gin.H{
-                "error": "not_reservation_owner",
-            })
+	err := h.service.Cancel(
+		c.Request.Context(),
+		reservationID,
+		userID,
+	)
 
-        default:
-            c.JSON(http.StatusConflict, gin.H{
-                "error": err.Error(),
-            })
-        }
-        return
-    }
+	if err != nil {
+		switch {
+		case errors.Is(err, domain.ErrReservationNotFound):
+			c.JSON(http.StatusNotFound, gin.H{
+				"error": "reservation_not_found",
+			})
 
-    c.JSON(http.StatusOK, gin.H{
-        "message": "reservation_cancelled",
-    })
+		case errors.Is(err, domain.ErrNotReservationOwner):
+			c.JSON(http.StatusForbidden, gin.H{
+				"error": "not_reservation_owner",
+			})
+
+		default:
+			c.JSON(http.StatusConflict, gin.H{
+				"error": err.Error(),
+			})
+		}
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"message": "reservation_cancelled",
+	})
 }

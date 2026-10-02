@@ -8,6 +8,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/Aryan-Jagadale/paytm-seat-reservation/internal/auth"
 	"github.com/Aryan-Jagadale/paytm-seat-reservation/internal/middleware"
 )
 
@@ -20,10 +21,13 @@ type Handler struct {
 	logger *slog.Logger
 }
 
-func NewRouter(ready ReadyChecker, logger *slog.Logger, showHandler *ShowHandler, reservationHandler *ReservationHandler) *gin.Engine {
+func NewRouter(ready ReadyChecker, logger *slog.Logger, showHandler *ShowHandler, reservationHandler *ReservationHandler,authenticator *auth.JWTAuthenticator,) *gin.Engine {
 	gin.SetMode(gin.ReleaseMode)
 
 	router := gin.New()
+
+	protected := router.Group("")
+	protected.Use(middleware.Authentication(authenticator))
 
 	router.Use(middleware.RequestID())
 	router.Use(middleware.Recovery(logger))
@@ -40,8 +44,8 @@ func NewRouter(ready ReadyChecker, logger *slog.Logger, showHandler *ShowHandler
 	router.POST("/shows", showHandler.CreateShow)
     router.GET("/shows/:id", showHandler.GetShow)
     
-	router.POST("/shows/:id/reserve", reservationHandler.Reserve)
-	router.POST("/reservations/:id/cancel", reservationHandler.Cancel)
+	protected.POST("/shows/:id/reserve", reservationHandler.Reserve)
+	protected.POST("/reservations/:id/cancel", reservationHandler.Cancel)
 
 	return router
 }
