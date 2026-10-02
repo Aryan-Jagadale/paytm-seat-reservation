@@ -39,6 +39,7 @@ func NewRouter(ready ReadyChecker, logger *slog.Logger, showHandler *ShowHandler
 
 	router.POST("/shows", showHandler.CreateShow)
 	router.POST("/shows/:id/reserve", reservationHandler.Reserve)
+	router.POST("/reservations/:id/cancel", reservationHandler.Cancel)
 
 	return router
 }

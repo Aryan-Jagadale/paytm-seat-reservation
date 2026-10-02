@@ -433,3 +433,138 @@ func sameSeats(a, b []string) bool {
 
 	return true
 }
+
+func (r *ReservationRepository) Cancel(
+	ctx context.Context,
+	reservationID string,
+	userID string,
+) error {
+
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin cancellation transaction: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	// 1. Lock the reservation row.
+	var (
+		reservationUserID string
+		status            string
+		showID            string
+	)
+
+	err = tx.QueryRow(
+		ctx,
+		`SELECT user_id, status, show_id
+         FROM reservations
+         WHERE id = $1
+         FOR UPDATE`,
+		reservationID,
+	).Scan(
+		&reservationUserID,
+		&status,
+		&showID,
+	)
+
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return domain.ErrReservationNotFound
+		}
+
+		return fmt.Errorf("get reservation: %w", err)
+	}
+
+	// 2. Verify ownership.
+	if reservationUserID != userID {
+		return domain.ErrNotReservationOwner
+	}
+
+	// 3. Only confirmed reservations can be cancelled.
+	if status != "confirmed" {
+		return fmt.Errorf("reservation cannot be cancelled in status %q", status)
+	}
+
+	// 4. Lock the seats belonging to this reservation.
+	rows, err := tx.Query(
+		ctx,
+		`SELECT s.id
+FROM reservation_seats rs
+JOIN seats s ON s.id = rs.seat_id
+WHERE rs.reservation_id = $1
+FOR UPDATE OF s;`,
+		reservationID,
+	)
+	if err != nil {
+		return fmt.Errorf("get reservation seats: %w", err)
+	}
+	defer rows.Close()
+
+	var seatIDs []string
+
+	for rows.Next() {
+		var seatID string
+
+		if err := rows.Scan(&seatID); err != nil {
+			return fmt.Errorf("scan reservation seat: %w", err)
+		}
+
+		seatIDs = append(seatIDs, seatID)
+	}
+
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterate reservation seats: %w", err)
+	}
+
+	// 5. Mark reservation as cancelled.
+	_, err = tx.Exec(
+		ctx,
+		`UPDATE reservations
+         SET status = 'cancelled',
+             updated_at = NOW()
+         WHERE id = $1`,
+		reservationID,
+	)
+	if err != nil {
+		return fmt.Errorf("cancel reservation: %w", err)
+	}
+
+	// 6. Release the seats.
+	for _, seatID := range seatIDs {
+		_, err = tx.Exec(
+			ctx,
+			`UPDATE seats
+             SET status = 'available',
+                 user_id = NULL,
+                 hold_expires_at = NULL
+             WHERE id = $1`,
+			seatID,
+		)
+
+		if err != nil {
+			return fmt.Errorf("release seat: %w", err)
+		}
+	}
+
+	// 7. Decrement user's reservation count.
+	_, err = tx.Exec(
+		ctx,
+		`UPDATE show_user_limits
+         SET reserved_count = reserved_count - $1
+         WHERE show_id = $2
+           AND user_id = $3`,
+		len(seatIDs),
+		showID,
+		userID,
+	)
+
+	if err != nil {
+		return fmt.Errorf("decrement user reservation count: %w", err)
+	}
+
+	// 8. Commit everything atomically.
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit cancellation transaction: %w", err)
+	}
+
+	return nil
+}

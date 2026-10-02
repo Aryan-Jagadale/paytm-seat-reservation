@@ -108,3 +108,39 @@ func (h *ReservationHandler) Reserve(c *gin.Context) {
 		IdempotencyKey: reservation.IdempotencyKey,
 	})
 }
+
+
+func (h *ReservationHandler) Cancel(c *gin.Context) {
+    reservationID := c.Param("id")
+    userID := c.GetHeader("X-User-ID") // temporary identity
+
+    err := h.service.Cancel(
+        c.Request.Context(),
+        reservationID,
+        userID,
+    )
+
+    if err != nil {
+        switch {
+        case errors.Is(err, domain.ErrReservationNotFound):
+            c.JSON(http.StatusNotFound, gin.H{
+                "error": "reservation_not_found",
+            })
+
+        case errors.Is(err, domain.ErrNotReservationOwner):
+            c.JSON(http.StatusForbidden, gin.H{
+                "error": "not_reservation_owner",
+            })
+
+        default:
+            c.JSON(http.StatusConflict, gin.H{
+                "error": err.Error(),
+            })
+        }
+        return
+    }
+
+    c.JSON(http.StatusOK, gin.H{
+        "message": "reservation_cancelled",
+    })
+}

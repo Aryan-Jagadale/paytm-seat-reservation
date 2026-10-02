@@ -23,6 +23,12 @@ type ReservationRepository interface {
 		seats []string,
 		idempotencyKey string,
 	) (*domain.Reservation, error)
+
+	Cancel(
+		ctx context.Context,
+		reservationID string,
+		userID string,
+	) error
 }
 
 type ReservationService struct {
@@ -79,4 +85,20 @@ func (s *ReservationService) Reserve(
 		req.Seats,
 		req.IdempotencyKey,
 	)
+}
+
+func (s *ReservationService) Cancel(
+	ctx context.Context,
+	reservationID string,
+	userID string,
+) error {
+	if strings.TrimSpace(reservationID) == "" {
+		return fmt.Errorf("reservation_id is required")
+	}
+
+	if strings.TrimSpace(userID) == "" {
+		return fmt.Errorf("user identity is required")
+	}
+
+	return s.repo.Cancel(ctx, reservationID, userID)
 }
