@@ -27,7 +27,7 @@ func (r *ReservationRepository) Reserve(
 	userID string,
 	seats []string,
 	idempotencyKey string,
-) (*domain.Reservation, error) {
+) (*domain.ReserveResult, error) {
 
 	sort.Strings(seats)
 
@@ -76,7 +76,10 @@ func (r *ReservationRepository) Reserve(
 			return nil, domain.ErrIdempotencyConflict
 		}
 
-		return &existing, nil
+		return &domain.ReserveResult{
+			Reservation: &existing,
+			Replayed:    true,
+		}, nil
 	}
 
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
@@ -150,7 +153,10 @@ func (r *ReservationRepository) Reserve(
 			return nil, domain.ErrIdempotencyConflict
 		}
 
-		return &reservation, nil
+		return &domain.ReserveResult{
+			Reservation: &reservation,
+			Replayed:    true,
+		}, nil
 	}
 
 	if err != nil {
@@ -369,7 +375,10 @@ func (r *ReservationRepository) Reserve(
 		)
 	}
 
-	return &reservation, nil
+	return &domain.ReserveResult{
+		Reservation: &reservation,
+		Replayed:    false,
+	}, nil
 }
 
 func (r *ReservationRepository) getReservationSeats(

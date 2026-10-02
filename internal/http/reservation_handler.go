@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"github.com/Aryan-Jagadale/paytm-seat-reservation/internal/domain"
+	"github.com/Aryan-Jagadale/paytm-seat-reservation/internal/metrics"
 	"github.com/Aryan-Jagadale/paytm-seat-reservation/internal/middleware"
 	"github.com/Aryan-Jagadale/paytm-seat-reservation/internal/service"
 	"github.com/gin-gonic/gin"
@@ -12,11 +13,13 @@ import (
 
 type ReservationHandler struct {
 	service *service.ReservationService
+	metrics *metrics.Metrics
 }
 
-func NewReservationHandler(service *service.ReservationService) *ReservationHandler {
+func NewReservationHandler(service *service.ReservationService, appMetrics *metrics.Metrics) *ReservationHandler {
 	return &ReservationHandler{
 		service: service,
+		metrics: appMetrics,
 	}
 }
 
@@ -57,7 +60,7 @@ func (h *ReservationHandler) Reserve(c *gin.Context) {
 		return
 	}
 
-	reservation, err := h.service.Reserve(
+	result, err := h.service.Reserve(
 		c.Request.Context(),
 		service.ReserveRequest{
 			ShowID:         showID,
@@ -70,11 +73,17 @@ func (h *ReservationHandler) Reserve(c *gin.Context) {
 	if err != nil {
 		switch {
 		case errors.Is(err, domain.ErrSeatUnavailable):
+			h.metrics.ReservationsDeclined.
+				WithLabelValues("seat_taken").
+				Inc()
 			c.JSON(http.StatusConflict, gin.H{
 				"error": "seat_taken",
 			})
 
 		case errors.Is(err, domain.ErrPerUserLimitExceeded):
+			h.metrics.ReservationsDeclined.
+				WithLabelValues("per_user_limit").
+				Inc()
 			c.JSON(http.StatusConflict, gin.H{
 				"error": "per_user_limit",
 			})
@@ -91,6 +100,16 @@ func (h *ReservationHandler) Reserve(c *gin.Context) {
 		}
 
 		return
+	}
+
+	reservation := result.Reservation
+
+	if result.Replayed {
+		h.metrics.ReservationsDeclined.
+			WithLabelValues("idempotent_replay").
+			Inc()
+	} else {
+		h.metrics.ReservationsConfirmed.Inc()
 	}
 
 	seats := make([]string, 0, len(reservation.Seats))

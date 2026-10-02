@@ -67,7 +67,6 @@ func (r *ShowRepository) CreateShow(
 		seat.Status = "available"
 	}
 
-	
 	if err := tx.Commit(ctx); err != nil {
 		return nil, err
 	}
@@ -75,8 +74,7 @@ func (r *ShowRepository) CreateShow(
 	return &show, nil
 }
 
-
-func (r *ShowRepository) GetShow(ctx context.Context,showID string,) (*domain.ShowDetails, error) {
+func (r *ShowRepository) GetShow(ctx context.Context, showID string) (*domain.ShowDetails, error) {
 
 	var show domain.ShowDetails
 
@@ -146,4 +144,21 @@ func (r *ShowRepository) GetShow(ctx context.Context,showID string,) (*domain.Sh
 	}
 
 	return &show, nil
+}
+
+func (r *ShowRepository) CountAvailableSeats(ctx context.Context) (int64, error) {
+	var count int64
+
+	err := r.pool.QueryRow(
+		ctx,
+		`SELECT COUNT(*)
+		 FROM seats
+		 WHERE status = 'available'`,
+	).Scan(&count)
+
+	if err != nil {
+		return 0, fmt.Errorf("count available seats: %w", err)
+	}
+
+	return count, nil
 }

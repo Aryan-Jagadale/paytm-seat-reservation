@@ -22,7 +22,7 @@ type ReservationRepository interface {
 		userID string,
 		seats []string,
 		idempotencyKey string,
-	) (*domain.Reservation, error)
+	) (*domain.ReserveResult, error)
 
 	Cancel(
 		ctx context.Context,
@@ -44,7 +44,7 @@ func NewReservationService(repo ReservationRepository) *ReservationService {
 func (s *ReservationService) Reserve(
 	ctx context.Context,
 	req ReserveRequest,
-) (*domain.Reservation, error) {
+) (*domain.ReserveResult, error) {
 
 	if strings.TrimSpace(req.ShowID) == "" {
 		return nil, fmt.Errorf("show_id is required")

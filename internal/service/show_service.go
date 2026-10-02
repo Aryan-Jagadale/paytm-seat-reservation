@@ -14,10 +14,22 @@ type ShowService struct {
 }
 
 
+type ShowRepository interface {
+	CreateShow(ctx context.Context, show *domain.Show) error
+	GetShow(ctx context.Context, showID string) (*domain.ShowDetails, error)
+	CountAvailableSeats(ctx context.Context) (int64, error)
+}
+
+
 func NewShowService(repo *repository.ShowRepository) *ShowService {
 	return &ShowService{
 		repo: repo,
 	}
+}
+
+
+func (s *ShowService) CountAvailableSeats(ctx context.Context) (int64, error) {
+	return s.repo.CountAvailableSeats(ctx)
 }
 
 func (s *ShowService) CreateShow(ctx context.Context,show domain.Show,) (*domain.Show, error) {

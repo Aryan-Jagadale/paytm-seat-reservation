@@ -18,6 +18,7 @@ import (
 	"github.com/Aryan-Jagadale/paytm-seat-reservation/internal/db"
 	apphealth "github.com/Aryan-Jagadale/paytm-seat-reservation/internal/health"
 	apphttp "github.com/Aryan-Jagadale/paytm-seat-reservation/internal/http"
+	"github.com/Aryan-Jagadale/paytm-seat-reservation/internal/metrics"
 
 	"github.com/Aryan-Jagadale/paytm-seat-reservation/internal/repository"
 	"github.com/Aryan-Jagadale/paytm-seat-reservation/internal/service"
@@ -56,17 +57,19 @@ func run() error {
 	defer pool.Close()
 
 	showRepo := repository.NewShowRepository(pool)
+	appMetrics := metrics.New();
+
 	showService := service.NewShowService(showRepo)
 	showHandler := apphttp.NewShowHandler(showService)
 
 	reservationRepo := repository.NewReservationRepository(pool)
 	reservationService := service.NewReservationService(reservationRepo)
-	reservationHandler := apphttp.NewReservationHandler(reservationService)
+	reservationHandler := apphttp.NewReservationHandler(reservationService,appMetrics)
 
 	authenticator := auth.NewJWTAuthenticator(cfg.AuthJWTSecret)
 
 	ready := apphealth.NewChecker(pool, time.Second)
-	router := apphttp.NewRouter(ready, logger, showHandler, reservationHandler, authenticator)
+	router := apphttp.NewRouter(ready, logger, showHandler, reservationHandler,showService ,authenticator, appMetrics)
 
 	server := &http.Server{
 		Addr:              net.JoinHostPort("0.0.0.0", cfg.Port),
