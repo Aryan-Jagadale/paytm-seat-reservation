@@ -21,7 +21,7 @@ type Handler struct {
     logger *slog.Logger
 }
 
-func NewRouter(ready ReadyChecker, logger *slog.Logger) *gin.Engine {
+func NewRouter(ready ReadyChecker, logger *slog.Logger , showHandler *ShowHandler,) *gin.Engine {
     gin.SetMode(gin.ReleaseMode)
 
     router := gin.New()
@@ -37,6 +37,8 @@ func NewRouter(ready ReadyChecker, logger *slog.Logger) *gin.Engine {
 
     router.GET("/healthz", handler.Liveness)
     router.GET("/readyz", handler.Readiness)
+
+    router.POST("/shows", showHandler.CreateShow)
 
     return router
 }

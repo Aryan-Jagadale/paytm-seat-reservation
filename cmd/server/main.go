@@ -17,6 +17,11 @@ import (
 	"github.com/Aryan-Jagadale/paytm-seat-reservation/internal/db"
 	apphealth "github.com/Aryan-Jagadale/paytm-seat-reservation/internal/health"
 	apphttp "github.com/Aryan-Jagadale/paytm-seat-reservation/internal/http"
+
+    "github.com/Aryan-Jagadale/paytm-seat-reservation/internal/repository"
+    "github.com/Aryan-Jagadale/paytm-seat-reservation/internal/service"
+
+
 )
 
 func main() {
@@ -51,8 +56,12 @@ func run() error {
 	}
 	defer pool.Close()
 
+    showRepo := repository.NewShowRepository(pool)
+    showService := service.NewShowService(showRepo)
+    showHandler := apphttp.NewShowHandler(showService)
+
 	ready := apphealth.NewChecker(pool, time.Second)
-	router := apphttp.NewRouter(ready, logger)
+	router := apphttp.NewRouter(ready, logger, showHandler,)
 
 	server := &http.Server{
 		Addr:              net.JoinHostPort("0.0.0.0", cfg.Port),
