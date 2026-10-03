@@ -12,16 +12,13 @@ type DevAuthHandler struct {
 	authenticator *auth.JWTAuthenticator
 }
 
-func NewDevAuthHandler(
-	authenticator *auth.JWTAuthenticator,
-) *DevAuthHandler {
-	return &DevAuthHandler{
-		authenticator: authenticator,
-	}
+func NewDevAuthHandler(authenticator *auth.JWTAuthenticator) *DevAuthHandler {
+	return &DevAuthHandler{authenticator: authenticator}
 }
 
 type devTokenRequest struct {
 	UserID string `json:"user_id"`
+	Role   string `json:"role"`
 }
 
 func (h *DevAuthHandler) GenerateToken(c *gin.Context) {
@@ -35,6 +32,7 @@ func (h *DevAuthHandler) GenerateToken(c *gin.Context) {
 	}
 
 	userID := strings.TrimSpace(req.UserID)
+	role := strings.TrimSpace(req.Role)
 
 	if userID == "" {
 		c.JSON(http.StatusBadRequest, gin.H{
@@ -43,7 +41,14 @@ func (h *DevAuthHandler) GenerateToken(c *gin.Context) {
 		return
 	}
 
-	token, err := h.authenticator.GenerateToken(userID)
+	if role != "user" && role != "admin" {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": "role must be user or admin",
+		})
+		return
+	}
+
+	token, err := h.authenticator.GenerateToken(userID, role)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error": "failed to generate token",

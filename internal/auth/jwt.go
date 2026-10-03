@@ -16,6 +16,7 @@ var (
 
 type Claims struct {
 	UserID string `json:"user_id"`
+	Role   string `json:"role"`
 	jwt.RegisteredClaims
 }
 
@@ -29,11 +30,11 @@ func NewJWTAuthenticator(secret string) *JWTAuthenticator {
 	}
 }
 
-func (a *JWTAuthenticator) Authenticate(tokenString string) (string, error) {
+func (a *JWTAuthenticator) Authenticate(tokenString string) (string, string, error) {
 	tokenString = strings.TrimSpace(tokenString)
 
 	if tokenString == "" {
-		return "", ErrMissingToken
+		return "", "", ErrMissingToken
 	}
 
 	token, err := jwt.ParseWithClaims(
@@ -43,47 +44,44 @@ func (a *JWTAuthenticator) Authenticate(tokenString string) (string, error) {
 			if token.Method != jwt.SigningMethodHS256 {
 				return nil, fmt.Errorf("unexpected signing method")
 			}
-
 			return a.secret, nil
 		},
 	)
 
 	if err != nil {
-		return "", ErrInvalidToken
+		return "", "", ErrInvalidToken
 	}
 
 	claims, ok := token.Claims.(*Claims)
 	if !ok || !token.Valid {
-		return "", ErrInvalidToken
+		return "", "", ErrInvalidToken
 	}
 
 	if strings.TrimSpace(claims.UserID) == "" {
-		return "", ErrInvalidToken
+		return "", "", ErrInvalidToken
 	}
 
-	return claims.UserID, nil
+	return claims.UserID, claims.Role, nil
 }
 
-func GenerateToken(secret string, userID string) (string, error) {
+func GenerateToken(secret, userID, role string) (string, error) {
 	now := time.Now()
 
 	claims := Claims{
 		UserID: userID,
+		Role:   role,
 		RegisteredClaims: jwt.RegisteredClaims{
 			Subject:   userID,
 			IssuedAt:  jwt.NewNumericDate(now),
-			ExpiresAt: jwt.NewNumericDate(now.Add(1 * time.Hour)),
+			ExpiresAt: jwt.NewNumericDate(now.Add(time.Hour)),
 		},
 	}
 
-	token := jwt.NewWithClaims(
-		jwt.SigningMethodHS256,
-		claims,
-	)
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 
 	return token.SignedString([]byte(secret))
 }
 
-func (a *JWTAuthenticator) GenerateToken(userID string) (string, error) {
-	return GenerateToken(string(a.secret), userID)
+func (a *JWTAuthenticator) GenerateToken(userID, role string) (string, error) {
+	return GenerateToken(string(a.secret), userID, role)
 }

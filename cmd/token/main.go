@@ -15,13 +15,21 @@ func main() {
 		log.Fatal("AUTH_JWT_SECRET is required")
 	}
 
-	if len(os.Args) != 2 {
-		log.Fatal("usage: go run ./cmd/token <user-id>")
+	if len(os.Args) != 3 {
+		log.Fatal("usage: go run ./cmd/token <user-id> <role>")
+	}
+
+	userID := os.Args[1]
+	role := os.Args[2]
+
+	if role != "user" && role != "admin" {
+		log.Fatal("role must be user or admin")
 	}
 
 	token, err := auth.GenerateToken(
 		secret,
-		os.Args[1],
+		userID,
+		role,
 	)
 	if err != nil {
 		log.Fatal(err)

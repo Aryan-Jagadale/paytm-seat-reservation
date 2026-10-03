@@ -24,7 +24,15 @@ type Handler struct {
 	logger *slog.Logger
 }
 
-func NewRouter(ready ReadyChecker, logger *slog.Logger, showHandler *ShowHandler, reservationHandler *ReservationHandler, showService *service.ShowService, authenticator *auth.JWTAuthenticator, appMetrics *metrics.Metrics) *gin.Engine {
+func NewRouter(
+	ready ReadyChecker,
+	logger *slog.Logger,
+	showHandler *ShowHandler,
+	reservationHandler *ReservationHandler,
+	showService *service.ShowService,
+	authenticator *auth.JWTAuthenticator,
+	appMetrics *metrics.Metrics,
+) *gin.Engine {
 	gin.SetMode(gin.ReleaseMode)
 
 	router := gin.New()
@@ -33,8 +41,14 @@ func NewRouter(ready ReadyChecker, logger *slog.Logger, showHandler *ShowHandler
 	router.Use(middleware.Recovery(logger))
 	router.Use(middleware.AccessLog(logger))
 
+	// Authenticated routes.
 	protected := router.Group("")
 	protected.Use(middleware.Authentication(authenticator))
+
+	// Admin-only routes.
+	admin := router.Group("")
+	admin.Use(middleware.Authentication(authenticator))
+	admin.Use(middleware.AdminOnly())
 
 	devAuthHandler := NewDevAuthHandler(authenticator)
 
@@ -45,10 +59,15 @@ func NewRouter(ready ReadyChecker, logger *slog.Logger, showHandler *ShowHandler
 
 	router.GET("/healthz", handler.Liveness)
 	router.GET("/readyz", handler.Readiness)
+
+	// Development-only for now.
 	router.POST("/dev/token", devAuthHandler.GenerateToken)
 
-	router.POST("/shows", showHandler.CreateShow)
+	// Public read endpoint.
 	router.GET("/shows/:id", showHandler.GetShow)
+
+	// Admin-only show creation.
+	admin.POST("/shows", showHandler.CreateShow)
 
 	router.GET("/metrics", func(c *gin.Context) {
 		if err := appMetrics.RefreshSeatsAvailable(
@@ -67,6 +86,7 @@ func NewRouter(ready ReadyChecker, logger *slog.Logger, showHandler *ShowHandler
 		).ServeHTTP(c.Writer, c.Request)
 	})
 
+	// Authenticated user routes.
 	protected.POST("/shows/:id/reserve", reservationHandler.Reserve)
 	protected.POST("/reservations/:id/cancel", reservationHandler.Cancel)
 
