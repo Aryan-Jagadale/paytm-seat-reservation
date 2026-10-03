@@ -15,7 +15,7 @@ import (
 
 const (
 	defaultConcurrency = 10000
-	defaultWorkers     = 100
+	defaultWorkers     = 120
 
 	testSeat       = "BURST-1"
 	testPricePaise = int64(10000)
