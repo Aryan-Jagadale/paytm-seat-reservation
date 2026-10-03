@@ -20,7 +20,7 @@ services:
       context: .
       dockerfile: Dockerfile
     ports:
-      - "8080:8080"
+      - "8081:8080"
     environment:
       DATABASE_URL: postgres://seat_user:local_password@postgres:5432/seat_reservation?sslmode=disable
       AUTH_JWT_SECRET: local-development-secret-change-me

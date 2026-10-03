@@ -1,13 +1,12 @@
 package http
 
 import (
-	"net/http"
 	"errors"
 	"github.com/Aryan-Jagadale/paytm-seat-reservation/internal/domain"
 	"github.com/Aryan-Jagadale/paytm-seat-reservation/internal/service"
 	"github.com/gin-gonic/gin"
+	"net/http"
 )
-
 
 type showResponse struct {
 	ID           string             `json:"id"`
@@ -42,10 +41,10 @@ func NewShowHandler(service *service.ShowService) *ShowHandler {
 }
 
 type createShowRequest struct {
-	Name          string   `json:"name"`
-	Seats         []string `json:"seats"`
-	PricePaise    int64    `json:"price_paise"`
-	PerUserLimit  int      `json:"per_user_limit"`
+	Name         string   `json:"name"`
+	Seats        []string `json:"seats"`
+	PricePaise   int64    `json:"price_paise"`
+	PerUserLimit int      `json:"per_user_limit"`
 }
 
 func (h *ShowHandler) CreateShow(c *gin.Context) {
@@ -53,7 +52,7 @@ func (h *ShowHandler) CreateShow(c *gin.Context) {
 
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
-			"error": "invalid request body",
+			"error": err.Error(),
 		})
 		return
 	}
@@ -67,10 +66,10 @@ func (h *ShowHandler) CreateShow(c *gin.Context) {
 	}
 
 	show := domain.Show{
-		Name:          req.Name,
-		PricePaise:    req.PricePaise,
-		PerUserLimit:  req.PerUserLimit,
-		Seats:         seats,
+		Name:         req.Name,
+		PricePaise:   req.PricePaise,
+		PerUserLimit: req.PerUserLimit,
+		Seats:        seats,
 	}
 
 	created, err := h.service.CreateShow(c.Request.Context(), show)
@@ -83,7 +82,6 @@ func (h *ShowHandler) CreateShow(c *gin.Context) {
 
 	c.JSON(http.StatusCreated, created)
 }
-
 
 func (h *ShowHandler) GetShow(c *gin.Context) {
 	showID := c.Param("id")
