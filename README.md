@@ -1,460 +1,359 @@
-# Seat Reservation Service
+# Paytm Money — Seat Reservation Service
 
-A concurrent seat reservation service built with **Go, Gin, PostgreSQL, and pgxpool**.
+A concurrency-safe seat reservation service built with **Go, Gin, PostgreSQL, Docker, and Prometheus**.
 
-The service is designed to remain correct under high-concurrency reservation traffic, including multiple users attempting to reserve the same seat simultaneously.
+The system is designed to handle high-contention reservation traffic while guaranteeing:
 
-## Key Properties
-
-* No double-selling of seats
+* No double booking
 * Atomic multi-seat reservations
-* Idempotent reservation requests
-* Per-user reservation limits
-* JWT-based authentication
-* Ownership checks for cancellation
-* PostgreSQL transactions for correctness
-* Deterministic seat ordering to avoid deadlocks
+* Idempotent retries
+* Per-user reservation limits under concurrency
+* Token-derived user identity
+* Ownership-protected cancellation
+* Transactional state consistency
+* Graceful shutdown
+* Health/readiness checks
 * Prometheus metrics
-* Health and readiness endpoints
-* Dockerized deployment
-* 20,000-request concurrency test
+* Structured JSON logging
+* Production deployment on Render
 
 ---
 
-## Architecture
+## Submission / Evaluation
 
-```text
-                         +-------------------+
-                         |      Client       |
-                         +---------+---------+
-                                   |
-                                   v
-                         +-------------------+
-                         |     Gin API       |
-                         +---------+---------+
-                                   |
-                    +--------------+--------------+
-                    |                             |
-                    v                             v
-             Auth Middleware              Request Middleware
-                    |                     Request ID / Logging
-                    v
-             Reservation Service
-                    |
-                    v
-             PostgreSQL / pgxpool
-                    |
-       +------------+------------+-------------+
-       |            |            |             |
-       v            v            v             v
-     shows        seats    reservations  show_user_limits
-```
+| Requirement                  | Details                                                                                                                             |
+| ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| **Public GitHub repository** | [github.com/Aryan-Jagadale/paytm-seat-reservation](https://github.com/Aryan-Jagadale/paytm-seat-reservation?utm_source=chatgpt.com) |
+| **Live deployment**          | [Production API](https://paytm-seat-reservation-aiyr.onrender.com?utm_source=chatgpt.com)                                           |
+| **Health check**             | [/health](https://paytm-seat-reservation-aiyr.onrender.com/health?utm_source=chatgpt.com)                                           |
+| **Readiness check**          | [/ready](https://paytm-seat-reservation-aiyr.onrender.com/ready?utm_source=chatgpt.com)                                             |
+| **Prometheus metrics**       | [/metrics](https://paytm-seat-reservation-aiyr.onrender.com/metrics?utm_source=chatgpt.com)                                         |
+| **Burst / acceptance test**  | `go run ./scripts/burst https://paytm-seat-reservation-aiyr.onrender.com`                                                           |
+| **Production burst**         | 20,000 concurrent reservation requests                                                                                              |
+| **Hot seats**                | 50                                                                                                                                  |
+| **Confirmed**                | 50                                                                                                                                  |
+| **Seat conflicts**           | 19,950                                                                                                                              |
+| **5xx responses**            | 0                                                                                                                                   |
+| **Network errors**           | 0                                                                                                                                   |
 
-PostgreSQL is the authoritative source of truth for seat state.
+The repository retains the incremental commit history used during development.
 
 ---
 
-## Tech Stack
+# 1. Architecture
 
-* Go 1.27
-* Gin
-* PostgreSQL
-* pgx/v5 + pgxpool
-* JWT
-* Prometheus
-* Docker / Docker Compose
+```text
+                         ┌─────────────────────┐
+                         │      Client         │
+                         └──────────┬──────────┘
+                                    │
+                                    ▼
+                         ┌─────────────────────┐
+                         │    Gin HTTP API     │
+                         │                     │
+                         │  Request ID         │
+                         │  JWT Identity       │
+                         │  Structured Logs    │
+                         └──────────┬──────────┘
+                                    │
+                                    ▼
+                         ┌─────────────────────┐
+                         │ Reservation Service │
+                         │                     │
+                         │ Validation          │
+                         │ Idempotency         │
+                         │ Per-user limits     │
+                         │ Transaction logic   │
+                         └──────────┬──────────┘
+                                    │
+                                    ▼
+                         ┌─────────────────────┐
+                         │    PostgreSQL       │
+                         │                     │
+                         │ Shows               │
+                         │ Seats               │
+                         │ Reservations        │
+                         │ Quota               │
+                         │ Idempotency keys    │
+                         └─────────────────────┘
+                                    │
+                                    ▼
+                         ┌─────────────────────┐
+                         │    Prometheus       │
+                         │                     │
+                         │ Counters            │
+                         │ Gauges              │
+                         └─────────────────────┘
+```
+
+The database is the source of truth for reservation state and concurrency control.
 
 ---
 
-## API
+# 2. Technology Stack
 
-### Health
-
-```text
-GET /healthz
-```
-
-Liveness endpoint.
-
-Example:
-
-```json
-{
-  "status": "ok"
-}
-```
-
-### Readiness
-
-```text
-GET /readyz
-```
-
-Checks the PostgreSQL dependency.
+* **Language:** Go
+* **HTTP:** Gin
+* **Database:** PostgreSQL
+* **Database Driver:** pgx / pgxpool
+* **Authentication:** JWT
+* **Metrics:** Prometheus
+* **Logging:** Go `slog`
+* **Containerization:** Docker / Docker Compose
+* **Deployment:** Render
+* **Testing:** Go testing + custom concurrency acceptance script
 
 ---
 
-### Metrics
+# 3. Core API
 
-```text
-GET /metrics
-```
+## Create Show
 
-Prometheus metrics include:
-
-```text
-reservations_confirmed_total
-reservations_declined_total
-seats_available
-```
-
----
-
-## Authentication
-
-Protected endpoints use:
-
-```text
-Authorization: Bearer <JWT>
-```
-
-The authenticated user's identity is taken from the JWT.
-
-The client cannot choose another user through the reservation request body.
-
-For local testing, the project includes a development-only token endpoint:
-
-```text
-POST /dev/token
-```
-
-Request:
-
-```json
-{
-  "user_id": "user-123",
-  "role": "user"
-}
-```
-
-Admin token:
-
-```json
-{
-  "user_id": "admin-1",
-  "role": "admin"
-}
-```
-
-> `/dev/token` exists to make the assignment and concurrency scripts self-contained. It should be disabled/replaced by the production identity provider in a real deployment.
-
----
-
-# API Usage
-
-## 1. Create a Show
-
-Admin-only endpoint:
-
-```text
+```http
 POST /shows
-```
-
-Header:
-
-```text
 Authorization: Bearer <admin-token>
 Content-Type: application/json
 ```
 
-Request:
+Example:
 
 ```json
 {
-  "name": "Concert A",
-  "seats": [
-    "A1",
-    "A2",
-    "A3",
-    "A4"
-  ],
-  "price_paise": 50000
+  "total_seats": 100,
+  "price_paise": 10000,
+  "per_user_limit": 4
 }
 ```
 
-Example response:
-
-```json
-{
-  "id": "show-id",
-  "name": "Concert A",
-  "price_paise": 50000
-}
-```
-
-All requested seats are initially created with:
-
-```text
-available
-```
+Returns the created show ID.
 
 ---
 
-## 2. Reserve Seats
+## Reserve Seats
 
-```text
-POST /shows/{show_id}/reserve
+```http
+POST /shows/{showID}/reservations
+Authorization: Bearer <user-token>
+Content-Type: application/json
+Idempotency-Key: <unique-key>
 ```
-
-Requires authentication.
-
-Request:
-
-```json
-{
-  "seats": [
-    "A1",
-    "A2"
-  ],
-  "idempotency_key": "order-123"
-}
-```
-
-Example successful response:
-
-```json
-{
-  "reservation_id": "reservation-id",
-  "status": "confirmed"
-}
-```
-
-A successful reservation immediately moves the selected seats:
-
-```text
-available -> confirmed
-```
-
----
-
-## 3. Cancel Reservation
-
-```text
-POST /reservations/{reservation_id}/cancel
-```
-
-Requires authentication.
-
-Only the reservation owner can cancel it.
-
-Successful cancellation:
-
-```text
-confirmed -> available
-```
-
----
-
-## 4. Get Show State
-
-```text
-GET /shows/{show_id}
-```
-
-Returns the show's seats and aggregate counts.
 
 Example:
 
 ```json
 {
-  "id": "show-id",
-  "name": "Concert A",
-  "total_seats": 4,
-  "available": 3,
-  "held": 0,
-  "confirmed": 1,
-  "seats": [
-    {
-      "seat_number": "A1",
-      "status": "confirmed"
-    },
-    {
-      "seat_number": "A2",
-      "status": "available"
-    }
-  ]
+  "seat_numbers": ["A1", "A2"]
 }
 ```
 
-The service maintains:
+Successful reservation:
 
 ```text
-available + held + confirmed = total_seats
+201 Created
+```
+
+Domain conflicts return `409 Conflict`.
+
+Examples:
+
+```text
+seat_taken
+per_user_limit
+idempotent_replay
 ```
 
 ---
 
-# Reservation Correctness
+## Cancel Reservation
 
-## Atomic Seat Claim
+```http
+POST /reservations/{reservationID}/cancel
+Authorization: Bearer <user-token>
+```
 
-The service does not perform a separate read followed by a write.
+A user can only cancel their own reservation.
 
-Instead, it performs:
+Attempting to cancel another user's reservation returns:
+
+```text
+403 Forbidden
+```
+
+---
+
+## Get Shows
+
+```http
+GET /shows
+```
+
+Returns the current show/seat state.
+
+This endpoint is also used by the acceptance script to continuously reconcile:
+
+```text
+available + held + confirmed == total_seats
+```
+
+---
+
+# 4. Concurrency Design
+
+The most important part of the system is preventing two concurrent requests from confirming the same seat.
+
+Reservation does not follow:
+
+```text
+SELECT seat
+    ↓
+if available
+    ↓
+UPDATE seat
+```
+
+because two concurrent requests could both observe the seat as available.
+
+Instead, reservation uses an atomic conditional database update inside a transaction:
 
 ```sql
 UPDATE seats
 SET status = 'confirmed',
-    user_id = $1
-WHERE show_id = $2
-  AND seat_number = $3
+    reservation_id = $1,
+    user_id = $2
+WHERE show_id = $3
+  AND seat_number = ANY($4)
   AND status = 'available';
 ```
 
-If multiple requests target the same seat concurrently, PostgreSQL serializes the conflicting row updates.
+The application verifies that the expected number of seats were updated.
 
-Exactly one request can change the seat from `available` to `confirmed`.
+If fewer seats were updated, the transaction is rolled back and the reservation is rejected.
 
-Other requests observe zero affected rows and receive:
-
-```text
-409 Conflict
-```
-
-with:
-
-```text
-seat_taken
-```
-
-This avoids the check-then-act race condition.
+This makes PostgreSQL responsible for the final concurrency decision.
 
 ---
 
-## Multi-seat Atomicity
+# 5. Atomic Multi-seat Reservations
 
-A request containing multiple seats is executed inside one PostgreSQL transaction.
-
-Requested seats are sorted deterministically before being processed.
+A reservation containing multiple seats is **all-or-nothing**.
 
 For example:
 
 ```text
-[A3, A1, A2]
-```
-
-becomes:
-
-```text
+Request:
 [A1, A2, A3]
 ```
 
-This ensures concurrent transactions acquire seats in a consistent order and reduces deadlock risk.
-
-If any requested seat cannot be claimed:
+If:
 
 ```text
-ROLLBACK
+A1 → available
+A2 → available
+A3 → already confirmed
 ```
 
-is performed.
+the complete transaction is rolled back.
 
-Therefore a request either reserves **all requested seats or none of them**.
+Result:
+
+```text
+No seats are confirmed.
+```
+
+This prevents partial reservations.
 
 ---
 
-# Idempotency
+# 6. Idempotency
 
-Idempotency is backed by PostgreSQL.
+Clients can safely retry a request using:
 
-The reservation table contains:
+```http
+Idempotency-Key: abc-123
+```
+
+The key is associated with the user, show, requested seats, and resulting reservation.
+
+For the same:
 
 ```text
-show_id
-user_id
-idempotency_key
+user + show + idempotency key + seats
 ```
 
-with the unique constraint:
+a retry returns the original reservation rather than creating another reservation.
 
-```sql
-UNIQUE (show_id, user_id, idempotency_key)
-```
-
-Behavior:
-
-### Same key + same seats
-
-Returns the original reservation.
-
-```text
-Request 1 -> 201
-Request 2 -> original reservation
-Request 3 -> original reservation
-```
-
-No additional seat is claimed.
-
-### Same key + different seats
-
-Returns:
+A request that reuses the same idempotency key with different seats is rejected:
 
 ```text
 409 Conflict
 ```
 
-This prevents accidental reuse of an idempotency key for a different operation.
+Example:
+
+```text
+Request 1:
+Idempotency-Key: abc
+Seats: A1
+
+Request 2:
+Idempotency-Key: abc
+Seats: A2
+
+→ 409 Conflict
+```
+
+This protects the API from duplicate state changes caused by client retries.
 
 ---
 
-# Per-user Limit
+# 7. Per-user Reservation Limit
 
-Each show has a configurable per-user reservation limit.
+Each show has a configurable reservation limit.
 
-The default is:
-
-```text
-4
-```
-
-Concurrency is handled using a row in:
+Example:
 
 ```text
-show_user_limits
+Per-user limit = 4
 ```
 
-identified by:
+If 10 concurrent requests are made by the same user, the database transaction locks/checks the user's quota row before confirming seats.
+
+Expected result:
 
 ```text
-(show_id, user_id)
+4 successful reservations
+6 per_user_limit conflicts
 ```
 
-The row is locked with:
+The quota check is performed inside the same transaction as the seat reservation.
 
-```sql
-SELECT reserved_count
-FROM show_user_limits
-WHERE show_id = $1
-  AND user_id = $2
-FOR UPDATE;
-```
-
-Therefore concurrent requests from the same user cannot all observe the same reservation count.
-
-For a limit of 4:
-
-```text
-10 concurrent requests
-
-4 -> 201
-6 -> 409 per_user_limit
-```
+Therefore, concurrent requests cannot bypass the limit through race conditions.
 
 ---
 
-# Holds and Expiry
+# 8. Identity and Authorization
 
-The schema supports:
+The user identity is derived from the JWT.
+
+The API does not trust a user ID supplied in the request body.
+
+For example, even if a request attempts:
+
+```json
+{
+  "user_id": "another-user"
+}
+```
+
+the authenticated identity remains the user encoded in the JWT.
+
+Cancellation also verifies ownership before changing reservation state.
+
+---
+
+# 9. Reservation State
+
+Seats currently support:
 
 ```text
 available
@@ -462,316 +361,693 @@ held
 confirmed
 ```
 
-and includes:
+The current reservation flow primarily uses:
 
 ```text
-hold_expires_at
+available → confirmed
 ```
 
-However, this implementation uses immediate confirmation:
+`held` exists in the schema for the reservation lifecycle but does not currently implement an expiry mechanism.
+
+The system continuously verifies the accounting invariant:
 
 ```text
-available -> confirmed
-```
-
-and explicit cancellation:
-
-```text
-confirmed -> available
-```
-
-Temporary holds are intentionally not implemented in the current version.
-
-The `held` state and expiry field remain in the schema so a future implementation can support:
-
-```text
-available -> held -> confirmed
-                 |
-                 +-> expired -> available
+available + held + confirmed = total_seats
 ```
 
 ---
 
-# Consistency vs Availability
+# 10. Health and Readiness
 
-The reservation path prioritizes consistency and correctness.
-
-PostgreSQL is the authoritative source of truth.
-
-If the database is unavailable, the service does not attempt to confirm seats using local in-memory state.
-
-This means the system may reject reservations during a database/network partition even when seats might technically be available.
-
-The trade-off is intentional:
+## Liveness
 
 ```text
-Prefer:
-temporary reservation failure
-
-over:
-incorrect seat ownership / double-selling
+GET /health
 ```
+
+Returns a successful response when the application process is alive.
+
+[Check production health](https://paytm-seat-reservation-aiyr.onrender.com/health?utm_source=chatgpt.com)
 
 ---
-
-# Observability
-
-## Health
-
-```text
-GET /healthz
-```
-
-Liveness check.
 
 ## Readiness
 
 ```text
-GET /readyz
+GET /ready
 ```
 
-Checks database connectivity.
+Readiness checks the PostgreSQL connection.
 
-## Metrics
+If the database is unavailable, readiness fails closed instead of reporting the service as ready.
+
+[Check production readiness](https://paytm-seat-reservation-aiyr.onrender.com/ready?utm_source=chatgpt.com)
+
+---
+
+# 11. Prometheus Metrics
+
+Metrics are exposed through:
 
 ```text
 GET /metrics
 ```
 
-Example metrics:
+[Production metrics endpoint](https://paytm-seat-reservation-aiyr.onrender.com/metrics?utm_source=chatgpt.com)
+
+The service exposes:
+
+### Confirmed reservations
 
 ```text
 reservations_confirmed_total
+```
+
+Counter of newly confirmed reservations.
+
+### Declined reservations
+
+```text
 reservations_declined_total{reason="seat_taken"}
 reservations_declined_total{reason="per_user_limit"}
 reservations_declined_total{reason="idempotent_replay"}
+```
+
+### Available seats
+
+```text
 seats_available
 ```
 
-Requests also include request IDs and structured access logs.
+Current available-seat gauge.
+
+Counters are cumulative for the running application process, while `seats_available` represents current state.
 
 ---
 
-# Running Locally
+# 12. Structured Logging
 
-## Prerequisites
+The application uses Go's structured `slog` logger.
 
-* Go 1.27+
+Logs are emitted as JSON and include request/correlation information.
+
+Example:
+
+```json
+{
+  "time": "2026-10-03T12:52:58Z",
+  "level": "INFO",
+  "msg": "server starting",
+  "address": "0.0.0.0:10000"
+}
+```
+
+Production logs can be accessed through:
+
+```text
+Render Dashboard
+→ paytm-seat-reservation
+→ Logs
+```
+
+Request IDs allow individual requests to be traced through the service.
+
+---
+
+# 13. Production Deployment
+
+The application is deployed on Render using the Dockerfile in this repository.
+
+Production URL:
+
+[https://paytm-seat-reservation-aiyr.onrender.com](https://paytm-seat-reservation-aiyr.onrender.com?utm_source=chatgpt.com)
+
+The deployed service runs the following startup flow:
+
+```text
+Application starts
+      ↓
+Load configuration
+      ↓
+Create PostgreSQL connection pool
+      ↓
+Ping database
+      ↓
+Run migrations
+      ↓
+Initialize HTTP server
+      ↓
+Start serving traffic
+```
+
+The Docker image uses a multi-stage build:
+
+```text
+Go builder image
+      ↓
+Compile static binary
+      ↓
+Minimal Alpine runtime image
+```
+
+---
+
+# 14. Graceful Shutdown
+
+The HTTP server supports graceful shutdown.
+
+Shutdown sequence:
+
+```text
+SIGTERM / SIGINT
+      ↓
+Stop accepting new requests
+      ↓
+Allow active requests to finish
+      ↓
+Close database resources
+      ↓
+Exit process
+```
+
+The shutdown timeout is configurable.
+
+---
+
+# 15. Database Connection Pool
+
+The application uses `pgxpool`.
+
+Default configuration:
+
+```text
+MAX_CONNS = 10
+MIN_CONNS = 2
+DB_CONNECT_TIMEOUT = 5s
+SHUTDOWN_TIMEOUT = 10s
+```
+
+These values can be configured using environment variables.
+
+---
+
+# 16. Local Development
+
+## Requirements
+
+* Go
 * Docker
 * Docker Compose
 
 ---
 
-## Start PostgreSQL
-
-The included Docker Compose configuration starts PostgreSQL and the application.
+## Start PostgreSQL + Application
 
 ```bash
 docker compose up --build
 ```
 
-The application is exposed on:
+The application is exposed locally on:
 
 ```text
-http://127.0.0.1:8081
+http://localhost:8081
+```
+
+PostgreSQL is exposed on:
+
+```text
+localhost:15432
 ```
 
 ---
 
-## Run Tests
+# 17. Environment Variables
 
-Run Go tests:
+Required:
+
+```text
+DATABASE_URL
+AUTH_JWT_SECRET
+```
+
+Optional:
+
+```text
+PORT
+MAX_CONNS
+MIN_CONNS
+DB_CONNECT_TIMEOUT
+SHUTDOWN_TIMEOUT
+```
+
+Example:
+
+```text
+PORT=8080
+MAX_CONNS=10
+MIN_CONNS=2
+DB_CONNECT_TIMEOUT=5s
+SHUTDOWN_TIMEOUT=10s
+```
+
+Secrets should not be committed to Git.
+
+---
+
+# 18. Tests
+
+Run the unit/integration test suite:
 
 ```bash
 go test ./...
 ```
 
-Optional static checks:
+Run static analysis:
 
 ```bash
 go vet ./...
 ```
 
+Both should pass before submission.
+
 ---
 
-# Concurrency Test Suite
+# 19. Production Acceptance / Burst Test
 
-The repository contains dedicated concurrency and correctness test programs.
-
-## 20K Hot-seat Burst
-
-```bash
-go run ./scripts/burst http://127.0.0.1:8081
-```
-
-This creates a fresh show and sends:
+The repository includes a single acceptance script:
 
 ```text
-20,000 requests
-200 workers
-200 users
-1 hot seat
+scripts/burst
 ```
 
-Expected result:
+It exercises the main concurrency and correctness requirements.
 
-```text
-Confirmed : 1
-409       : 19,999
-5xx       : 0
-```
-
-The test also validates the final reconciliation invariant.
-
----
-
-## Idempotency Test
+Run against production:
 
 ```bash
-go run ./scripts/idempotency http://127.0.0.1:8081
+go run ./scripts/burst https://paytm-seat-reservation-aiyr.onrender.com
 ```
 
-Tests:
+The script performs:
 
-* concurrent requests using the same idempotency key
-* same reservation returned to all retries
-* same key with different seats returns 409
+1. Admin token generation
+2. User token generation
+3. 20,000-request hot-seat concurrency test
+4. Idempotency test
+5. Concurrent per-user limit test
+6. Token-derived identity test
+7. Cancellation ownership test
+8. Final acceptance checks
 
----
-
-## Per-user Limit Test
-
-```bash
-go run ./scripts/per_user http://127.0.0.1:8081
-```
-
-Runs 10 concurrent reservations for a user with a limit of 4.
-
-Expected:
+Configuration used by the production acceptance test:
 
 ```text
-201 : 4
-409 : 6
+Burst requests : 20,000
+Workers        : 180
+Burst users    : 200
+Hot seats      : 50
+Per-user limit : 4
 ```
 
 ---
 
-## Identity / Spoofing Test
+# 20. Production Acceptance Result
 
-```bash
-go run ./scripts/identity http://127.0.0.1:8081
-```
-
-Validates:
-
-* JWT identity overrides a spoofed request-body user ID
-* another user cannot cancel the reservation
-* the reservation owner can cancel it
-* the seat returns to available
-
----
-
-# Test Results
-
-The 20,000-request hot-seat test produced:
+The following acceptance test was executed against the live Render deployment:
 
 ```text
-Requests       : 20000
-Workers        : 200
-Users          : 200
+go run .\scripts\burst https://paytm-seat-reservation-aiyr.onrender.com
+```
 
-Confirmed      : 1
-seat_taken     : 19999
+Result:
 
+```text
+========================================
+       SEAT RESERVATION ACCEPTANCE
+========================================
+
+Base URL       : https://paytm-seat-reservation-aiyr.onrender.com
+Hot seats      : 50
+Burst requests : 20000
+Workers        : 180
+Burst users    : 200
+User limit     : 4
+
+[1/8] Generating admin token...
+      PASS
+
+[2/8] Generating user tokens...
+      Generated 200 tokens
+
+[3/8] Running hot-seat storm...
+      Show ID: d6fb2b5b-6410-44f8-9e14-2903e508be84
+
+========================================
+           HOT-SEAT STORM
+========================================
+
+Duration       : 6m25.795s
+Confirmed      : 50
+Declined:
+  seat_taken           : 19950
 5xx            : 0
 Network errors : 0
+
+========================================
+      PASS
+
+[4/8] Testing idempotency...
+      PASS
+
+[5/8] Testing concurrent per-user limit...
+      PASS
+
+[6/8] Testing token-derived identity...
+      PASS
+
+[7/8] Testing cancellation ownership...
+      PASS
+
+[8/8] Acceptance checks complete
+
+========================================
+       ALL ACCEPTANCE TESTS PASSED
+========================================
 ```
 
-Final state:
+### What this demonstrates
+
+For 20,000 concurrent reservation attempts targeting 50 hot seats:
 
 ```text
-Total seats    : 1
-Available      : 0
-Held           : 0
-Confirmed      : 1
-
-Reconciliation : PASS
+50   → confirmed
+19,950 → seat_taken
+0    → 5xx
+0    → network errors
 ```
 
-Other tests validated:
+Therefore, every hot seat received only one successful reservation.
 
-* idempotent retries
-* same-key/different-body conflict
-* per-user limit under concurrency
-* authentication identity
-* cancellation ownership
-* all-or-nothing multi-seat reservations
+The test also verified:
+
+* Idempotent retries
+* Same idempotency key with different seats
+* Concurrent per-user limits
+* JWT-derived identity
+* Reservation ownership during cancellation
+* State reconciliation
 
 ---
 
-# Project Structure
+# 21. State Reconciliation
+
+During the burst test, the script periodically queries the API and verifies:
+
+```text
+available + held + confirmed == total_seats
+```
+
+This check is performed during and after the concurrent workload.
+
+The test fails if the invariant is violated.
+
+This provides an application-level check that the database state remains internally consistent under concurrent load.
+
+---
+
+# 22. Example Production Metrics
+
+After the production acceptance run, the metrics endpoint reported:
+
+```text
+reservations_confirmed_total 57
+
+reservations_declined_total{reason="idempotent_replay"} 9
+reservations_declined_total{reason="per_user_limit"} 6
+reservations_declined_total{reason="seat_taken"} 19950
+
+seats_available 8
+```
+
+The counters are cumulative across the acceptance scenarios.
+
+For example:
+
+```text
+57 confirmed
+=
+50 hot-seat confirmations
++ 1 idempotency test
++ 4 per-user-limit test
++ 1 identity test
++ 1 cancellation test
+```
+
+The `seat_taken` counter corresponds to the 20,000-request hot-seat storm.
+
+---
+
+# 23. Project Structure
 
 ```text
 .
 ├── cmd/
-│   ├── server/
-│   └── token/
+│   └── server/
+│       └── main.go
 │
 ├── internal/
 │   ├── auth/
 │   ├── config/
-│   ├── handlers/
-│   ├── middleware/
+│   ├── db/
+│   ├── health/
+│   ├── http/
 │   ├── metrics/
-│   ├── repository/
-│   └── service/
+│   └── reservation/
 │
 ├── migrations/
+│   └── 001_init.sql
 │
 ├── scripts/
-│   ├── burst/
-│   ├── idempotency/
-│   ├── per_user/
-│   └── identity/
+│   └── burst/
 │
 ├── Dockerfile
 ├── docker-compose.yml
 ├── go.mod
 ├── go.sum
-├── README.md
-└── WRITEUP.md
+└── README.md
 ```
 
 ---
 
-# Production Considerations
+# 24. Docker
 
-For a production deployment, I would additionally:
+Build:
 
-* replace `/dev/token` with the real identity provider
-* implement temporary holds and expiry
-* add distributed tracing
-* add database lock/latency metrics
-* add failure-injection testing
-* tune PostgreSQL connection pools
-* add rate limiting and abuse protection
-* add stronger audit logging
-* establish production alerting and dashboards
+```bash
+docker build -t paytm-seat-reservation .
+```
 
-The core reservation correctness mechanism would continue to rely on the authoritative transactional database.
+Run:
+
+```bash
+docker run \
+  -p 8080:8080 \
+  -e DATABASE_URL="<database-url>" \
+  -e AUTH_JWT_SECRET="<jwt-secret>" \
+  paytm-seat-reservation
+```
+
+For local development, Docker Compose is recommended because it starts PostgreSQL and the application together.
 
 ---
 
-# AI Usage
+# 25. Design Decisions
 
-AI was used as a development aid for:
+### Why PostgreSQL?
 
-* reasoning about concurrency and race conditions
-* reviewing transaction behavior
-* designing concurrency test scenarios
-* debugging local Docker/network issues
-* improving documentation
+Reservations require strong transactional guarantees and concurrency control.
 
-The implementation decisions were reviewed and validated against the running service.
+PostgreSQL provides:
 
-The final design and correctness claims are backed by the included concurrency tests, including the 20,000-request hot-seat burst.
+* Transactions
+* Row-level locking
+* Conditional updates
+* Unique constraints
+* Strong consistency
+
+This makes it suitable as the source of truth for seat inventory.
+
+### Why enforce correctness in the database?
+
+Application-level checks such as:
+
+```text
+if seat.available {
+    reserve()
+}
+```
+
+are unsafe under concurrent requests.
+
+The database performs the final atomic state transition.
+
+### Why use transactions?
+
+A reservation can involve multiple pieces of state:
+
+```text
+Seats
+Quota
+Idempotency
+Reservation
+```
+
+These changes must either all succeed or all roll back.
+
+---
+
+# 26. Failure Handling
+
+Expected business conflicts are represented as 4xx responses rather than server errors.
+
+Examples:
+
+```text
+400 → invalid request
+401 → unauthenticated
+403 → unauthorized ownership operation
+409 → seat conflict / quota conflict / idempotency conflict
+```
+
+Unexpected infrastructure or application failures return 5xx.
+
+The production 20,000-request acceptance test recorded:
+
+```text
+5xx = 0
+```
+
+---
+
+# 27. Security Considerations
+
+The service currently includes `/dev/token` for self-contained assignment/demo testing.
+
+This endpoint is intended for the assignment environment and should be replaced with a real identity provider in a production system.
+
+Additional production hardening would include:
+
+* External identity provider
+* Secret manager
+* Key rotation
+* Rate limiting
+* TLS termination
+* Audit logging
+* Restricted administrative APIs
+* Database credential rotation
+* More granular authorization policies
+
+---
+
+# 28. Future Improvements
+
+Possible extensions include:
+
+* Expiring seat holds
+* Background hold cleanup
+* Redis-based rate limiting
+* Distributed tracing
+* OpenTelemetry
+* Dedicated metrics dashboards
+* Horizontal autoscaling
+* Read replicas for read-heavy workloads
+* External authentication provider
+* Stronger administrative authorization
+* Load testing with geographically distributed clients
+
+These are intentionally outside the core assignment implementation.
+
+---
+
+# 29. AI Usage
+
+AI assistance was used during development for:
+
+* Reviewing concurrency approaches
+* Discussing PostgreSQL transaction semantics
+* Debugging and reasoning about Go implementation details
+* Reviewing Docker/deployment configuration
+* Improving documentation
+* Designing acceptance-test scenarios
+
+The core implementation, testing, deployment, and validation were executed against the actual project and live service.
+
+---
+
+# 30. Repository
+
+Source code and commit history:
+
+[GitHub Repository](https://github.com/Aryan-Jagadale/paytm-seat-reservation?utm_source=chatgpt.com)
+
+Production deployment:
+
+[Live API](https://paytm-seat-reservation-aiyr.onrender.com?utm_source=chatgpt.com)
+
+---
+
+## Quick Start
+
+### Local
+
+```bash
+docker compose up --build
+```
+
+### Tests
+
+```bash
+go test ./...
+go vet ./...
+```
+
+### Production acceptance
+
+```bash
+go run ./scripts/burst https://paytm-seat-reservation-aiyr.onrender.com
+```
+
+### Production endpoints
+
+```text
+GET /health
+GET /ready
+GET /metrics
+```
+
+---
+
+# Final Status
+
+```text
+✓ Public GitHub repository
+✓ Incremental commit history
+✓ Dockerized application
+✓ PostgreSQL persistence
+✓ Atomic seat reservation
+✓ Multi-seat atomicity
+✓ Idempotency
+✓ Per-user concurrency limit
+✓ JWT-derived identity
+✓ Cancellation ownership
+✓ Health endpoint
+✓ Readiness endpoint
+✓ Prometheus metrics
+✓ Structured JSON logs
+✓ Graceful shutdown
+✓ Live Render deployment
+✓ 20,000-request production burst
+✓ 0 production 5xx
+✓ 0 production network errors
+✓ Acceptance tests passed
+```
