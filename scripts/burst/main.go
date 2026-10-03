@@ -14,18 +14,39 @@ import (
 )
 
 const (
-	defaultConcurrency = 10000
-	defaultWorkers     = 120
+	defaultConcurrency = 20000
+	defaultWorkers     = 180
+	defaultUsers       = 200
 
-	testSeat       = "BURST-1"
-	testPricePaise = int64(10000)
+	pricePaise   = int64(10000)
 
-	// 200 distinct authenticated users.
-	defaultUsers = 200
+	perUserLimit = 4
 
-	// Only print the first N network errors.
 	maxNetworkErrorsToPrint = 10
 )
+
+var hotSeats = []string{
+	"BURST-01",
+	"BURST-02",
+	"BURST-03",
+	"BURST-04",
+	"BURST-05",
+	"BURST-06",
+	"BURST-07",
+	"BURST-08",
+	"BURST-09",
+	"BURST-10",
+	"BURST-11",
+	"BURST-12",
+	"BURST-13",
+	"BURST-14",
+	"BURST-15",
+	"BURST-16",
+	"BURST-17",
+	"BURST-18",
+	"BURST-19",
+	"BURST-20",
+}
 
 type tokenRequest struct {
 	UserID string `json:"user_id"`
@@ -48,12 +69,12 @@ type createShowResponse struct {
 }
 
 type showResponse struct {
-	ID           string       `json:"id"`
-	Name         string       `json:"name"`
-	PricePaise   int64        `json:"price_paise"`
-	PerUserLimit int          `json:"per_user_limit"`
+	ID           string      `json:"id"`
+	Name         string      `json:"name"`
+	PricePaise   int64       `json:"price_paise"`
+	PerUserLimit int         `json:"per_user_limit"`
 	Seats        []seatResult `json:"seats"`
-	Counts       seatCounts   `json:"counts"`
+	Counts       seatCounts  `json:"counts"`
 }
 
 type seatResult struct {
@@ -73,12 +94,38 @@ type seatCounts struct {
 type reserveRequest struct {
 	Seats          []string `json:"seats"`
 	IdempotencyKey string   `json:"idempotency_key"`
+
+	// Used only by the identity-spoof test.
+	// The server must derive identity from JWT, not this field.
+	UserID string `json:"user_id,omitempty"`
+}
+
+type reservationResponse struct {
+	ID             string   `json:"id"`
+	ShowID         string   `json:"show_id"`
+	UserID         string   `json:"user_id"`
+	Status         string   `json:"status"`
+	AmountPaise    int64    `json:"amount_paise"`
+	Seats          []string `json:"seats"`
+	IdempotencyKey string   `json:"idempotency_key"`
 }
 
 type burstResult struct {
 	statusCode int
 	reason     string
+	reservation *reservationResponse
 	err        error
+}
+
+type reservationAttempt struct {
+	result burstResult
+}
+
+type reconciliationState struct {
+	total     int
+	available int
+	held      int
+	confirmed int
 }
 
 func main() {
@@ -95,9 +142,10 @@ func main() {
 		defaultConcurrency,
 	)
 
-	workers := defaultWorkers
-	
-
+	workers := getPositiveEnv(
+		"WORKERS",
+		defaultWorkers,
+	)
 
 	userCount := getPositiveEnv(
 		"BURST_USERS",
@@ -113,27 +161,28 @@ func main() {
 	}
 
 	fmt.Println("========================================")
-	fmt.Println("       SEAT RESERVATION BURST TEST")
+	fmt.Println("       SEAT RESERVATION ACCEPTANCE")
 	fmt.Println("========================================")
-	fmt.Printf("Base URL     : %s\n", baseURL)
-	fmt.Printf("Requests     : %d\n", concurrency)
-	fmt.Printf("Workers      : %d\n", workers)
-	fmt.Printf("Users        : %d\n", userCount)
-	fmt.Printf("Target seat  : %s\n", testSeat)
+	fmt.Printf("Base URL       : %s\n", baseURL)
+	fmt.Printf("Hot seats      : %d\n", len(hotSeats))
+	fmt.Printf("Burst requests : %d\n", concurrency)
+	fmt.Printf("Workers        : %d\n", workers)
+	fmt.Printf("Burst users    : %d\n", userCount)
+	fmt.Printf("User limit     : %d\n", perUserLimit)
 	fmt.Println()
 
-	client := newHTTPClient(workers)
+	client := newHTTPClient()
 
 	// ------------------------------------------------------------
-	// 1. Generate admin token.
+	// Authentication
 	// ------------------------------------------------------------
 
-	fmt.Println("[1/5] Creating admin authentication token...")
+	fmt.Println("[1/8] Generating admin token...")
 
 	adminToken, err := generateToken(
 		client,
 		baseURL,
-		"burst-admin",
+		"acceptance-admin",
 		"admin",
 	)
 
@@ -141,29 +190,13 @@ func main() {
 		fatal("failed to generate admin token", err)
 	}
 
-	// ------------------------------------------------------------
-	// 2. Create fresh show.
-	// ------------------------------------------------------------
-
-	fmt.Println("[2/5] Creating fresh test show...")
-
-	showID, err := createShow(
-		client,
-		baseURL,
-		adminToken,
-	)
-
-	if err != nil {
-		fatal("failed to create test show", err)
-	}
-
-	fmt.Printf("      Show ID: %s\n", showID)
+	fmt.Println("      PASS")
 
 	// ------------------------------------------------------------
-	// 3. Generate user tokens.
+	// User tokens
 	// ------------------------------------------------------------
 
-	fmt.Println("[3/5] Generating test-user tokens...")
+	fmt.Println("[2/8] Generating user tokens...")
 
 	tokens, err := generateUserTokens(
 		client,
@@ -175,30 +208,232 @@ func main() {
 		fatal("failed to generate user tokens", err)
 	}
 
-	fmt.Printf("      Generated %d user tokens\n", len(tokens))
+	fmt.Printf("      Generated %d tokens\n", len(tokens))
 
 	// ------------------------------------------------------------
-	// 4. Hot-seat storm.
+	// Main hot-seat storm
 	// ------------------------------------------------------------
 
-	fmt.Println("[4/5] Starting hot-seat storm...")
-	fmt.Printf(
-		"      %d requests -> 1 seat\n",
-		concurrency,
+	fmt.Println("[3/8] Running hot-seat storm...")
+
+	showID, err := createShow(
+		client,
+		baseURL,
+		adminToken,
+		"Hot Seat Burst",
+		hotSeats,
+		perUserLimit,
 	)
 
-	results := make(chan burstResult, concurrency)
-	jobs := make(chan int)
+	if err != nil {
+		fatal("failed to create hot-seat show", err)
+	}
 
-	var workersWG sync.WaitGroup
+	fmt.Printf("      Show ID: %s\n", showID)
+
+	// Start reconciliation observer while the storm is running.
+	observerStop := make(chan struct{})
+	observerDone := make(chan error, 1)
+
+	go observeReconciliation(
+		client,
+		baseURL,
+		showID,
+		observerStop,
+		observerDone,
+	)
+
+	stormResult := runHotSeatStorm(
+		client,
+		baseURL,
+		showID,
+		tokens,
+		concurrency,
+		workers,
+	)
+
+	close(observerStop)
+
+	observerErr := <-observerDone
+
+	if observerErr != nil {
+		fatal(
+			"reconciliation invariant failed during burst",
+			observerErr,
+		)
+	}
+
+	printStormSummary(stormResult)
+
+	if stormResult.networkErrors != 0 {
+		fatal(
+			"hot-seat storm produced network errors",
+			fmt.Errorf("%d network errors", stormResult.networkErrors),
+		)
+	}
+
+	if stormResult.fiveXX != 0 {
+		fatal(
+			"hot-seat storm produced 5xx responses",
+			fmt.Errorf("%d 5xx responses", stormResult.fiveXX),
+		)
+	}
+
+	if stormResult.confirmed != int64(len(hotSeats)) {
+		fatal(
+			"unexpected confirmed count",
+			fmt.Errorf(
+				"expected %d confirmed, got %d",
+				len(hotSeats),
+				stormResult.confirmed,
+			),
+		)
+	}
+
+	finalShow, err := getShow(
+		client,
+		baseURL,
+		showID,
+	)
+
+	if err != nil {
+		fatal("failed to fetch hot-seat final state", err)
+	}
+
+	if err := verifyReconciliation(finalShow); err != nil {
+		fatal("final reconciliation failed", err)
+	}
+
+	if finalShow.Counts.Confirmed != len(hotSeats) {
+		fatal(
+			"hot-seat final confirmed count incorrect",
+			fmt.Errorf(
+				"expected %d, got %d",
+				len(hotSeats),
+				finalShow.Counts.Confirmed,
+			),
+		)
+	}
+
+	fmt.Println("      PASS")
+
+	// ------------------------------------------------------------
+	// Idempotency
+	// ------------------------------------------------------------
+
+	fmt.Println("[4/8] Testing idempotency...")
+
+	if err := testIdempotency(
+		client,
+		baseURL,
+		adminToken,
+		tokens[0],
+	); err != nil {
+		fatal("idempotency test failed", err)
+	}
+
+	fmt.Println("      PASS")
+
+	// ------------------------------------------------------------
+	// Per-user limit
+	// ------------------------------------------------------------
+
+	fmt.Println("[5/8] Testing concurrent per-user limit...")
+
+	if err := testPerUserLimit(
+		client,
+		baseURL,
+		adminToken,
+		tokens[0],
+	); err != nil {
+		fatal("per-user limit test failed", err)
+	}
+
+	fmt.Println("      PASS")
+
+	// ------------------------------------------------------------
+	// Identity
+	// ------------------------------------------------------------
+
+	fmt.Println("[6/8] Testing token-derived identity...")
+
+	if len(tokens) < 2 {
+		fatal(
+			"identity test requires two users",
+			errors.New("not enough tokens"),
+		)
+	}
+
+	if err := testIdentity(
+		client,
+		baseURL,
+		adminToken,
+		tokens[0],
+	); err != nil {
+		fatal("identity test failed", err)
+	}
+
+	fmt.Println("      PASS")
+
+	// ------------------------------------------------------------
+	// Cancellation ownership
+	// ------------------------------------------------------------
+
+	fmt.Println("[7/8] Testing cancellation ownership...")
+
+	if err := testCancellationOwnership(
+		client,
+		baseURL,
+		adminToken,
+		tokens[0],
+		tokens[1],
+	); err != nil {
+		fatal("cancellation ownership test failed", err)
+	}
+
+	fmt.Println("      PASS")
+
+	// ------------------------------------------------------------
+	// Final output
+	// ------------------------------------------------------------
+
+	fmt.Println("[8/8] Acceptance checks complete")
+
+	fmt.Println()
+	fmt.Println("========================================")
+	fmt.Println("       ALL ACCEPTANCE TESTS PASSED")
+	fmt.Println("========================================")
+}
+
+type stormSummary struct {
+	confirmed       int64
+	fiveXX          int64
+	networkErrors   int64
+	declinedByReason map[string]int64
+	duration        time.Duration
+}
+
+func runHotSeatStorm(
+	client *http.Client,
+	baseURL string,
+	showID string,
+	tokens []string,
+	requests int,
+	workers int,
+) stormSummary {
+
+	jobs := make(chan int)
+	results := make(chan burstResult, requests)
+
+	var wg sync.WaitGroup
 
 	start := time.Now()
 
-	for workerID := 0; workerID < workers; workerID++ {
-		workersWG.Add(1)
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
 
 		go func() {
-			defer workersWG.Done()
+			defer wg.Done()
 
 			for requestID := range jobs {
 				userIndex := requestID % len(tokens)
@@ -210,13 +445,21 @@ func main() {
 
 				token := tokens[userIndex]
 
+				// Distribute requests across the handful of hot seats.
+				seat := hotSeats[requestID%len(hotSeats)]
+
 				result := reserveSeat(
 					client,
 					baseURL,
 					showID,
 					userID,
 					token,
-					requestID,
+					seat,
+					fmt.Sprintf(
+						"burst-%s-%d",
+						userID,
+						requestID,
+					),
 				)
 
 				results <- result
@@ -225,31 +468,28 @@ func main() {
 	}
 
 	go func() {
-		for i := 0; i < concurrency; i++ {
+		for i := 0; i < requests; i++ {
 			jobs <- i
 		}
 
 		close(jobs)
 
-		workersWG.Wait()
+		wg.Wait()
 		close(results)
 	}()
 
-	var confirmed int64
-	var fiveXX int64
-	var networkErrors int64
+	var summary stormSummary
 
-	declinedByReason := make(map[string]int64)
+	summary.declinedByReason = make(map[string]int64)
 
 	for result := range results {
 		if result.err != nil {
-			networkErrors++
+			summary.networkErrors++
 
-			// Print only the first 10 network errors.
-			if networkErrors <= maxNetworkErrorsToPrint {
+			if summary.networkErrors <= maxNetworkErrorsToPrint {
 				fmt.Printf(
-					"\nNETWORK ERROR %d: %v\n",
-					networkErrors,
+					"NETWORK ERROR %d: %v\n",
+					summary.networkErrors,
 					result.err,
 				)
 			}
@@ -259,10 +499,10 @@ func main() {
 
 		switch {
 		case result.statusCode == http.StatusCreated:
-			confirmed++
+			summary.confirmed++
 
 		case result.statusCode >= 500:
-			fiveXX++
+			summary.fiveXX++
 
 		case result.statusCode == http.StatusConflict:
 			reason := result.reason
@@ -271,7 +511,7 @@ func main() {
 				reason = "unknown_conflict"
 			}
 
-			declinedByReason[reason]++
+			summary.declinedByReason[reason]++
 
 		default:
 			reason := fmt.Sprintf(
@@ -279,91 +519,530 @@ func main() {
 				result.statusCode,
 			)
 
-			declinedByReason[reason]++
+			summary.declinedByReason[reason]++
 		}
 	}
 
-	duration := time.Since(start)
+	summary.duration = time.Since(start)
 
-	// ------------------------------------------------------------
-	// 5. Final reconciliation.
-	// ------------------------------------------------------------
+	return summary
+}
 
+func printStormSummary(summary stormSummary) {
 	fmt.Println()
-	fmt.Println("[5/5] Fetching final show state...")
+	fmt.Println("========================================")
+	fmt.Println("           HOT-SEAT STORM")
+	fmt.Println("========================================")
 
-	finalShow, err := getShow(
+	fmt.Printf(
+		"Duration       : %s\n",
+		summary.duration.Round(time.Millisecond),
+	)
+
+	fmt.Printf(
+		"Confirmed      : %d\n",
+		summary.confirmed,
+	)
+
+	fmt.Println("Declined:")
+
+	for reason, count := range summary.declinedByReason {
+		fmt.Printf(
+			"  %-20s : %d\n",
+			reason,
+			count,
+		)
+	}
+
+	fmt.Printf("5xx            : %d\n", summary.fiveXX)
+	fmt.Printf("Network errors : %d\n", summary.networkErrors)
+
+	fmt.Println("========================================")
+}
+
+func observeReconciliation(
+	client *http.Client,
+	baseURL string,
+	showID string,
+	stop <-chan struct{},
+	done chan<- error,
+) {
+
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-stop:
+			done <- nil
+			return
+
+		case <-ticker.C:
+			show, err := getShow(
+				client,
+				baseURL,
+				showID,
+			)
+
+			if err != nil {
+				done <- fmt.Errorf(
+					"observer failed: %w",
+					err,
+				)
+				return
+			}
+
+			if err := verifyReconciliation(show); err != nil {
+				done <- err
+				return
+			}
+		}
+	}
+}
+
+func verifyReconciliation(show *showResponse) error {
+	sum :=
+		show.Counts.Available +
+			show.Counts.Held +
+			show.Counts.Confirmed
+
+	if sum != show.Counts.Total {
+		return fmt.Errorf(
+			"reconciliation invariant violated: available=%d held=%d confirmed=%d total=%d",
+			show.Counts.Available,
+			show.Counts.Held,
+			show.Counts.Confirmed,
+			show.Counts.Total,
+		)
+	}
+
+	return nil
+}
+
+func testIdempotency(
+	client *http.Client,
+	baseURL string,
+	adminToken string,
+	userToken string,
+) error {
+
+	seats := []string{
+		"IDEMP-1",
+		"IDEMP-2",
+	}
+
+	showID, err := createShow(
+		client,
+		baseURL,
+		adminToken,
+		"Idempotency Test",
+		seats,
+		4,
+	)
+
+	if err != nil {
+		return err
+	}
+
+	const key = "idempotency-same-key"
+
+	var wg sync.WaitGroup
+	results := make(chan burstResult, 10)
+
+	for i := 0; i < 10; i++ {
+		wg.Add(1)
+
+		go func() {
+			defer wg.Done()
+
+			results <- reserveSeat(
+				client,
+				baseURL,
+				showID,
+				"idempotency-user",
+				userToken,
+				"IDEMP-1",
+				key,
+			)
+		}()
+	}
+
+	wg.Wait()
+	close(results)
+
+	var reservationID string
+	successes := 0
+
+	for result := range results {
+		if result.err != nil {
+			return result.err
+		}
+
+		if result.statusCode != http.StatusCreated {
+			return fmt.Errorf(
+				"same-key retry returned HTTP %d (%s)",
+				result.statusCode,
+				result.reason,
+			)
+		}
+
+		if result.reservation == nil {
+			return errors.New("missing reservation response")
+		}
+
+		successes++
+
+		if reservationID == "" {
+			reservationID = result.reservation.ID
+		}
+
+		if result.reservation.ID != reservationID {
+			return fmt.Errorf(
+				"idempotency created multiple reservations: %s != %s",
+				reservationID,
+				result.reservation.ID,
+			)
+		}
+	}
+
+	if successes != 10 {
+		return fmt.Errorf(
+			"expected 10 idempotent responses, got %d",
+			successes,
+		)
+	}
+
+	// Same key + different seat must conflict.
+	conflict := reserveSeat(
+		client,
+		baseURL,
+		showID,
+		"idempotency-user",
+		userToken,
+		"IDEMP-2",
+		key,
+	)
+
+	if conflict.err != nil {
+		return conflict.err
+	}
+
+	if conflict.statusCode != http.StatusConflict {
+		return fmt.Errorf(
+			"same key + different seats returned HTTP %d",
+			conflict.statusCode,
+		)
+	}
+
+	if conflict.reason != "idempotency_key_reused_with_different_seats" {
+		return fmt.Errorf(
+			"unexpected idempotency conflict reason: %s",
+			conflict.reason,
+		)
+	}
+
+	show, err := getShow(
 		client,
 		baseURL,
 		showID,
 	)
 
 	if err != nil {
-		fatal("failed to fetch final show state", err)
+		return err
 	}
 
-	printSummary(
-		concurrency,
-		workers,
-		userCount,
-		duration,
-		confirmed,
-		declinedByReason,
-		fiveXX,
-		networkErrors,
-		finalShow,
+	if show.Counts.Confirmed != 1 {
+		return fmt.Errorf(
+			"idempotency created %d reservations",
+			show.Counts.Confirmed,
+		)
+	}
+
+	return verifyReconciliation(show)
+}
+
+func testPerUserLimit(
+	client *http.Client,
+	baseURL string,
+	adminToken string,
+	userToken string,
+) error {
+
+	seats := []string{
+		"LIMIT-1",
+		"LIMIT-2",
+		"LIMIT-3",
+		"LIMIT-4",
+		"LIMIT-5",
+		"LIMIT-6",
+		"LIMIT-7",
+		"LIMIT-8",
+		"LIMIT-9",
+		"LIMIT-10",
+	}
+
+	showID, err := createShow(
+		client,
+		baseURL,
+		adminToken,
+		"Per User Limit Test",
+		seats,
+		perUserLimit,
 	)
 
-	// ------------------------------------------------------------
-	// Assertions.
-	// ------------------------------------------------------------
-
-	if confirmed != 1 {
-		fmt.Println()
-		fmt.Println("FAIL: expected exactly 1 confirmed reservation")
-		os.Exit(1)
+	if err != nil {
+		return err
 	}
 
-	if fiveXX != 0 {
-		fmt.Println()
-		fmt.Println("FAIL: 5xx responses detected")
-		os.Exit(1)
+	results := make(chan burstResult, len(seats))
+
+	var wg sync.WaitGroup
+
+	for i, seat := range seats {
+		wg.Add(1)
+
+		go func(index int, seat string) {
+			defer wg.Done()
+
+			results <- reserveSeat(
+				client,
+				baseURL,
+				showID,
+				"limit-user",
+				userToken,
+				seat,
+				fmt.Sprintf(
+					"limit-user-key-%d",
+					index,
+				),
+			)
+		}(i, seat)
 	}
 
-	if networkErrors != 0 {
-		fmt.Println()
-		fmt.Println("FAIL: network errors detected")
-		os.Exit(1)
+	wg.Wait()
+	close(results)
+
+	var confirmed int
+	var limitDeclined int
+
+	for result := range results {
+		if result.err != nil {
+			return result.err
+		}
+
+		switch result.statusCode {
+		case http.StatusCreated:
+			confirmed++
+
+		case http.StatusConflict:
+			if result.reason == "per_user_limit" {
+				limitDeclined++
+			} else {
+				return fmt.Errorf(
+					"unexpected conflict reason: %s",
+					result.reason,
+				)
+			}
+
+		default:
+			return fmt.Errorf(
+				"unexpected response: HTTP %d",
+				result.statusCode,
+			)
+		}
 	}
 
-	if finalShow.Counts.Total !=
-		finalShow.Counts.Available+
-			finalShow.Counts.Held+
-			finalShow.Counts.Confirmed {
-
-		fmt.Println()
-		fmt.Println("FAIL: seat reconciliation invariant violated")
-		os.Exit(1)
+	if confirmed > perUserLimit {
+		return fmt.Errorf(
+			"user obtained %d reservations with limit=%d",
+			confirmed,
+			perUserLimit,
+		)
 	}
 
-	if finalShow.Counts.Confirmed != 1 {
-		fmt.Println()
-		fmt.Println("FAIL: final confirmed count is not 1")
-		os.Exit(1)
+	if confirmed != perUserLimit {
+		return fmt.Errorf(
+			"expected exactly %d successful reservations, got %d",
+			perUserLimit,
+			confirmed,
+		)
 	}
 
-	if finalShow.Counts.Available !=
-		finalShow.Counts.Total-1 {
-
-		fmt.Println()
-		fmt.Println("FAIL: final available count is incorrect")
-		os.Exit(1)
+	if limitDeclined != len(seats)-perUserLimit {
+		return fmt.Errorf(
+			"expected %d per-user-limit declines, got %d",
+			len(seats)-perUserLimit,
+			limitDeclined,
+		)
 	}
 
-	fmt.Println()
-	fmt.Println("========================================")
-	fmt.Println("             BURST TEST PASSED")
-	fmt.Println("========================================")
+	show, err := getShow(
+		client,
+		baseURL,
+		showID,
+	)
+
+	if err != nil {
+		return err
+	}
+
+	if show.Counts.Confirmed != perUserLimit {
+		return fmt.Errorf(
+			"show reports %d confirmed seats, expected %d",
+			show.Counts.Confirmed,
+			perUserLimit,
+		)
+	}
+
+	return verifyReconciliation(show)
+}
+
+func testIdentity(
+	client *http.Client,
+	baseURL string,
+	adminToken string,
+	userAToken string,
+) error {
+
+	showID, err := createShow(
+		client,
+		baseURL,
+		adminToken,
+		"Identity Test",
+		[]string{"IDENTITY-1"},
+		4,
+	)
+
+	if err != nil {
+		return err
+	}
+
+	result := reserveSeatWithSpoofedUser(
+		client,
+		baseURL,
+		showID,
+		userAToken,
+		"real-user-a",
+		"spoofed-user-b",
+		"IDENTITY-1",
+		"identity-test-key",
+	)
+
+	if result.err != nil {
+		return result.err
+	}
+
+	if result.statusCode != http.StatusCreated {
+		return fmt.Errorf(
+			"identity test returned HTTP %d (%s)",
+			result.statusCode,
+			result.reason,
+		)
+	}
+
+	if result.reservation == nil {
+		return errors.New("identity response missing reservation")
+	}
+
+	if result.reservation.UserID != "real-user-a" {
+		return fmt.Errorf(
+			"identity spoof succeeded: reservation belongs to %q",
+			result.reservation.UserID,
+		)
+	}
+
+	return nil
+}
+
+func testCancellationOwnership(
+	client *http.Client,
+	baseURL string,
+	adminToken string,
+	userAToken string,
+	userBToken string,
+) error {
+
+	showID, err := createShow(
+		client,
+		baseURL,
+		adminToken,
+		"Cancellation Ownership Test",
+		[]string{"CANCEL-1"},
+		4,
+	)
+
+	if err != nil {
+		return err
+	}
+
+	reservation := reserveSeat(
+		client,
+		baseURL,
+		showID,
+		"cancel-user-a",
+		userAToken,
+		"CANCEL-1",
+		"cancel-test-key",
+	)
+
+	if reservation.err != nil {
+		return reservation.err
+	}
+
+	if reservation.statusCode != http.StatusCreated {
+		return fmt.Errorf(
+			"reservation creation returned HTTP %d",
+			reservation.statusCode,
+		)
+	}
+
+	if reservation.reservation == nil {
+		return errors.New("missing reservation")
+	}
+
+	reservationID := reservation.reservation.ID
+
+	// User B must not be able to cancel A's reservation.
+	status, body, err := cancelReservation(
+		client,
+		baseURL,
+		reservationID,
+		userBToken,
+	)
+
+	if err != nil {
+		return err
+	}
+
+	if status != http.StatusForbidden {
+		return fmt.Errorf(
+			"other user cancellation returned HTTP %d: %s",
+			status,
+			string(body),
+		)
+	}
+
+	// User A can cancel its own reservation.
+	status, body, err = cancelReservation(
+		client,
+		baseURL,
+		reservationID,
+		userAToken,
+	)
+
+	if err != nil {
+		return err
+	}
+
+	if status != http.StatusOK {
+		return fmt.Errorf(
+			"owner cancellation returned HTTP %d: %s",
+			status,
+			string(body),
+		)
+	}
+
+	return nil
 }
 
 func generateUserTokens(
@@ -420,11 +1099,13 @@ func generateUserTokens(
 		}()
 	}
 
-	for i := 0; i < userCount; i++ {
-		jobs <- i
-	}
+	go func() {
+		for i := 0; i < userCount; i++ {
+			jobs <- i
+		}
 
-	close(jobs)
+		close(jobs)
+	}()
 
 	wg.Wait()
 	close(errCh)
@@ -492,9 +1173,7 @@ func generateToken(
 
 	if response.Token == "" {
 		return "",
-			errors.New(
-				"token endpoint returned empty token",
-			)
+			errors.New("token endpoint returned empty token")
 	}
 
 	return response.Token, nil
@@ -504,14 +1183,17 @@ func createShow(
 	client *http.Client,
 	baseURL string,
 	adminToken string,
+	name string,
+	seats []string,
+	limit int,
 ) (string, error) {
 
 	payload, err := json.Marshal(
 		createShowRequest{
-			Name:         "Burst Test Show",
-			Seats:        []string{testSeat},
-			PricePaise:   testPricePaise,
-			PerUserLimit: 4,
+			Name:         name,
+			Seats:        seats,
+			PricePaise:   pricePaise,
+			PerUserLimit: limit,
 		},
 	)
 
@@ -559,9 +1241,7 @@ func createShow(
 
 	if response.ID == "" {
 		return "",
-			errors.New(
-				"create show returned empty ID",
-			)
+			errors.New("create show returned empty ID")
 	}
 
 	return response.ID, nil
@@ -573,30 +1253,47 @@ func reserveSeat(
 	showID string,
 	userID string,
 	token string,
-	requestID int,
+	seat string,
+	idempotencyKey string,
 ) burstResult {
 
-	payload, err := json.Marshal(
-		reserveRequest{
-			Seats: []string{testSeat},
-
-			// Unique key per request.
-			IdempotencyKey: fmt.Sprintf(
-				"burst-%s-%d",
-				userID,
-				requestID,
-			),
-		},
+	return reserveSeatWithSpoofedUser(
+		client,
+		baseURL,
+		showID,
+		token,
+		userID,
+		"",
+		seat,
+		idempotencyKey,
 	)
+}
+
+func reserveSeatWithSpoofedUser(
+	client *http.Client,
+	baseURL string,
+	showID string,
+	token string,
+	actualUserID string,
+	spoofedUserID string,
+	seat string,
+	idempotencyKey string,
+) burstResult {
+
+	request := reserveRequest{
+		Seats:          []string{seat},
+		IdempotencyKey: idempotencyKey,
+	}
+
+	if spoofedUserID != "" {
+		request.UserID = spoofedUserID
+	}
+
+	payload, err := json.Marshal(request)
 
 	if err != nil {
 		return burstResult{
-			err: fmt.Errorf(
-				"request %d (%s): encode request: %w",
-				requestID,
-				userID,
-				err,
-			),
+			err: err,
 		}
 	}
 
@@ -616,9 +1313,9 @@ func reserveSeat(
 	if err != nil {
 		return burstResult{
 			err: fmt.Errorf(
-				"request %d (%s): %w",
-				requestID,
-				userID,
+				"user=%s seat=%s: %w",
+				actualUserID,
+				seat,
 				err,
 			),
 		}
@@ -631,12 +1328,7 @@ func reserveSeat(
 	if err != nil {
 		return burstResult{
 			statusCode: resp.StatusCode,
-			err: fmt.Errorf(
-				"request %d (%s): read response: %w",
-				requestID,
-				userID,
-				err,
-			),
+			err: err,
 		}
 	}
 
@@ -646,10 +1338,71 @@ func reserveSeat(
 
 	_ = json.Unmarshal(body, &errorResponse)
 
-	return burstResult{
+	result := burstResult{
 		statusCode: resp.StatusCode,
 		reason:     errorResponse.Error,
 	}
+
+	if resp.StatusCode == http.StatusCreated {
+		var reservation reservationResponse
+
+		if err := json.Unmarshal(body, &reservation); err != nil {
+			return burstResult{
+				statusCode: resp.StatusCode,
+				err: fmt.Errorf(
+					"decode reservation response: %w",
+					err,
+				),
+			}
+		}
+
+		result.reservation = &reservation
+	}
+
+	return result
+}
+
+func cancelReservation(
+	client *http.Client,
+	baseURL string,
+	reservationID string,
+	token string,
+) (int, []byte, error) {
+
+	req, err := http.NewRequest(
+		http.MethodPost,
+		fmt.Sprintf(
+			"%s/reservations/%s/cancel",
+			baseURL,
+			reservationID,
+		),
+		nil,
+	)
+
+	if err != nil {
+		return 0, nil, err
+	}
+
+	req.Header.Set(
+		"Authorization",
+		"Bearer "+token,
+	)
+
+	resp, err := client.Do(req)
+
+	if err != nil {
+		return 0, nil, err
+	}
+
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+
+	if err != nil {
+		return resp.StatusCode, nil, err
+	}
+
+	return resp.StatusCode, body, nil
 }
 
 func getShow(
@@ -658,15 +1411,13 @@ func getShow(
 	showID string,
 ) (*showResponse, error) {
 
-	url := fmt.Sprintf(
-		"%s/shows/%s",
-		baseURL,
-		showID,
-	)
-
 	req, err := http.NewRequest(
 		http.MethodGet,
-		url,
+		fmt.Sprintf(
+			"%s/shows/%s",
+			baseURL,
+			showID,
+		),
 		nil,
 	)
 
@@ -700,11 +1451,7 @@ func getShow(
 	var response showResponse
 
 	if err := json.Unmarshal(body, &response); err != nil {
-		return nil,
-			fmt.Errorf(
-				"decode show response: %w",
-				err,
-			)
+		return nil, err
 	}
 
 	return &response, nil
@@ -742,107 +1489,24 @@ func postJSON(
 	return client.Do(req)
 }
 
-func newHTTPClient(workers int) *http.Client {
+func newHTTPClient() *http.Client {
 	transport := &http.Transport{
-		MaxIdleConns:        200,
-		MaxIdleConnsPerHost: 100,
-		MaxConnsPerHost:     100,
+		MaxIdleConns:        300,
+		MaxIdleConnsPerHost: 200,
+		MaxConnsPerHost:     200,
 
 		IdleConnTimeout:       90 * time.Second,
-		DisableKeepAlives:     false, 
-		ResponseHeaderTimeout: 60 * time.Second,
-		ForceAttemptHTTP2:     false,
+		DisableKeepAlives:     false,
+		ResponseHeaderTimeout: 90 * time.Second,
 	}
 
 	return &http.Client{
 		Transport: transport,
-		Timeout:   90 * time.Second,
+		Timeout:   120 * time.Second,
 	}
 }
 
-func printSummary(
-	requests int,
-	workers int,
-	users int,
-	duration time.Duration,
-	confirmed int64,
-	declined map[string]int64,
-	fiveXX int64,
-	networkErrors int64,
-	show *showResponse,
-) {
-
-	fmt.Println()
-	fmt.Println("========================================")
-	fmt.Println("              BURST SUMMARY")
-	fmt.Println("========================================")
-
-	fmt.Printf("Requests       : %d\n", requests)
-	fmt.Printf("Workers        : %d\n", workers)
-	fmt.Printf("Users          : %d\n", users)
-	fmt.Printf("Duration       : %s\n", duration.Round(time.Millisecond))
-
-	fmt.Println()
-	fmt.Println("Confirmed:")
-	fmt.Printf("  confirmed    : %d\n", confirmed)
-
-	fmt.Println()
-	fmt.Println("Declined by reason:")
-
-	if len(declined) == 0 {
-		fmt.Println("  none")
-	} else {
-		for reason, count := range declined {
-			fmt.Printf(
-				"  %-20s : %d\n",
-				reason,
-				count,
-			)
-		}
-	}
-
-	fmt.Println()
-	fmt.Printf("5xx            : %d\n", fiveXX)
-	fmt.Printf("Network errors : %d\n", networkErrors)
-
-	fmt.Println()
-	fmt.Println("========================================")
-	fmt.Println("          FINAL RECONCILIATION")
-	fmt.Println("========================================")
-
-	fmt.Printf("Show ID        : %s\n", show.ID)
-	fmt.Printf("Total seats    : %d\n", show.Counts.Total)
-	fmt.Printf("Available      : %d\n", show.Counts.Available)
-	fmt.Printf("Held           : %d\n", show.Counts.Held)
-	fmt.Printf("Confirmed      : %d\n", show.Counts.Confirmed)
-
-	sum :=
-		show.Counts.Available +
-			show.Counts.Held +
-			show.Counts.Confirmed
-
-	fmt.Printf(
-		"Invariant      : %d + %d + %d = %d\n",
-		show.Counts.Available,
-		show.Counts.Held,
-		show.Counts.Confirmed,
-		sum,
-	)
-
-	if sum == show.Counts.Total {
-		fmt.Println("Reconciliation : PASS")
-	} else {
-		fmt.Println("Reconciliation : FAIL")
-	}
-
-	fmt.Println("========================================")
-}
-
-func getPositiveEnv(
-	name string,
-	fallback int,
-) int {
-
+func getPositiveEnv(name string, fallback int) int {
 	value := os.Getenv(name)
 
 	if value == "" {
@@ -866,7 +1530,6 @@ func getPositiveEnv(
 }
 
 func trimTrailingSlash(value string) string {
-
 	for len(value) > 0 &&
 		value[len(value)-1] == '/' {
 
@@ -877,9 +1540,8 @@ func trimTrailingSlash(value string) string {
 }
 
 func fatal(message string, err error) {
-
 	fmt.Printf(
-		"ERROR: %s: %v\n",
+		"\nFAIL: %s: %v\n",
 		message,
 		err,
 	)
