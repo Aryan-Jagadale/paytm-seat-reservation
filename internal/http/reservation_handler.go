@@ -4,6 +4,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"time"
 
 	"github.com/Aryan-Jagadale/paytm-seat-reservation/internal/domain"
 	"github.com/Aryan-Jagadale/paytm-seat-reservation/internal/metrics"
@@ -46,6 +47,24 @@ type reservationResponse struct {
 }
 
 func (h *ReservationHandler) Reserve(c *gin.Context) {
+
+	start := time.Now()
+
+	defer func() {
+		h.logger.Info(
+			"reservation request completed",
+			slog.String("request_id",
+				middleware.RequestIDFromContext(c.Request.Context()),
+			),
+			slog.String("method", c.Request.Method),
+			slog.String("path", c.Request.URL.Path),
+			slog.Int("status", c.Writer.Status()),
+			slog.Duration("duration", time.Since(start)),
+			slog.String("context_error",
+				contextErrorString(c.Request.Context().Err()),
+			),
+		)
+	}()
 	showID := c.Param("id")
 
 	userID, ok := middleware.GetUserID(c)
@@ -275,4 +294,12 @@ func (h *ReservationHandler) Cancel(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"message": "reservation_cancelled",
 	})
+}
+
+
+func contextErrorString(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
 }

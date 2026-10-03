@@ -10,7 +10,6 @@ import (
 	"os"
 	"strconv"
 	"sync"
-	"sync/atomic"
 	"time"
 )
 
@@ -18,12 +17,14 @@ const (
 	defaultConcurrency = 20000
 	defaultWorkers     = 200
 
-	testSeat      = "BURST-1"
+	testSeat       = "BURST-1"
 	testPricePaise = int64(10000)
 
-	// We use 200 distinct authenticated users.
-	// Each user sends multiple requests, but all requests target the same seat.
+	// 200 distinct authenticated users.
 	defaultUsers = 200
+
+	// Only print the first N network errors.
+	maxNetworkErrorsToPrint = 10
 )
 
 type tokenRequest struct {
@@ -80,12 +81,6 @@ type burstResult struct {
 	err        error
 }
 
-type counters struct {
-	confirmed atomic.Int64
-	fiveXX    atomic.Int64
-	network   atomic.Int64
-}
-
 func main() {
 	if len(os.Args) != 2 {
 		fmt.Println("usage: go run ./scripts/burst <BASE_URL>")
@@ -93,18 +88,16 @@ func main() {
 		os.Exit(1)
 	}
 
-	baseURL := os.Args[1]
-	baseURL = trimTrailingSlash(baseURL)
+	baseURL := trimTrailingSlash(os.Args[1])
 
 	concurrency := getPositiveEnv(
 		"CONCURRENCY",
 		defaultConcurrency,
 	)
 
-	workers := getPositiveEnv(
-		"WORKERS",
-		defaultWorkers,
-	)
+	workers := defaultWorkers
+	
+
 
 	userCount := getPositiveEnv(
 		"BURST_USERS",
@@ -132,7 +125,7 @@ func main() {
 	client := newHTTPClient(workers)
 
 	// ------------------------------------------------------------
-	// 1. Generate admin token automatically.
+	// 1. Generate admin token.
 	// ------------------------------------------------------------
 
 	fmt.Println("[1/5] Creating admin authentication token...")
@@ -143,12 +136,13 @@ func main() {
 		"burst-admin",
 		"admin",
 	)
+
 	if err != nil {
 		fatal("failed to generate admin token", err)
 	}
 
 	// ------------------------------------------------------------
-	// 2. Create a fresh show.
+	// 2. Create fresh show.
 	// ------------------------------------------------------------
 
 	fmt.Println("[2/5] Creating fresh test show...")
@@ -158,6 +152,7 @@ func main() {
 		baseURL,
 		adminToken,
 	)
+
 	if err != nil {
 		fatal("failed to create test show", err)
 	}
@@ -175,6 +170,7 @@ func main() {
 		baseURL,
 		userCount,
 	)
+
 	if err != nil {
 		fatal("failed to generate user tokens", err)
 	}
@@ -182,7 +178,7 @@ func main() {
 	fmt.Printf("      Generated %d user tokens\n", len(tokens))
 
 	// ------------------------------------------------------------
-	// 4. Fire the hot-seat storm.
+	// 4. Hot-seat storm.
 	// ------------------------------------------------------------
 
 	fmt.Println("[4/5] Starting hot-seat storm...")
@@ -192,7 +188,6 @@ func main() {
 	)
 
 	results := make(chan burstResult, concurrency)
-
 	jobs := make(chan int)
 
 	var workersWG sync.WaitGroup
@@ -240,15 +235,25 @@ func main() {
 		close(results)
 	}()
 
-	confirmed := int64(0)
-	fiveXX := int64(0)
-	networkErrors := int64(0)
+	var confirmed int64
+	var fiveXX int64
+	var networkErrors int64
 
 	declinedByReason := make(map[string]int64)
 
 	for result := range results {
 		if result.err != nil {
 			networkErrors++
+
+			// Print only the first 10 network errors.
+			if networkErrors <= maxNetworkErrorsToPrint {
+				fmt.Printf(
+					"\nNETWORK ERROR %d: %v\n",
+					networkErrors,
+					result.err,
+				)
+			}
+
 			continue
 		}
 
@@ -281,7 +286,7 @@ func main() {
 	duration := time.Since(start)
 
 	// ------------------------------------------------------------
-	// 5. Reconcile final show state.
+	// 5. Final reconciliation.
 	// ------------------------------------------------------------
 
 	fmt.Println()
@@ -308,6 +313,10 @@ func main() {
 		networkErrors,
 		finalShow,
 	)
+
+	// ------------------------------------------------------------
+	// Assertions.
+	// ------------------------------------------------------------
 
 	if confirmed != 1 {
 		fmt.Println()
@@ -339,9 +348,7 @@ func main() {
 
 	if finalShow.Counts.Confirmed != 1 {
 		fmt.Println()
-		fmt.Println(
-			"FAIL: final confirmed count is not 1",
-		)
+		fmt.Println("FAIL: final confirmed count is not 1")
 		os.Exit(1)
 	}
 
@@ -349,9 +356,7 @@ func main() {
 		finalShow.Counts.Total-1 {
 
 		fmt.Println()
-		fmt.Println(
-			"FAIL: final available count is incorrect",
-		)
+		fmt.Println("FAIL: final available count is incorrect")
 		os.Exit(1)
 	}
 
@@ -369,8 +374,6 @@ func generateUserTokens(
 
 	tokens := make([]string, userCount)
 
-	// Generate these concurrently, but keep the amount modest.
-	// This is authentication setup, not the actual stress test.
 	const tokenWorkers = 20
 
 	jobs := make(chan int)
@@ -463,6 +466,7 @@ func generateToken(
 	defer resp.Body.Close()
 
 	body, err := io.ReadAll(resp.Body)
+
 	if err != nil {
 		return "", err
 	}
@@ -479,16 +483,18 @@ func generateToken(
 	var response tokenResponse
 
 	if err := json.Unmarshal(body, &response); err != nil {
-		return "", fmt.Errorf(
-			"decode token response: %w",
-			err,
-		)
+		return "",
+			fmt.Errorf(
+				"decode token response: %w",
+				err,
+			)
 	}
 
 	if response.Token == "" {
-		return "", errors.New(
-			"token endpoint returned empty token",
-		)
+		return "",
+			errors.New(
+				"token endpoint returned empty token",
+			)
 	}
 
 	return response.Token, nil
@@ -527,6 +533,7 @@ func createShow(
 	defer resp.Body.Close()
 
 	body, err := io.ReadAll(resp.Body)
+
 	if err != nil {
 		return "", err
 	}
@@ -543,16 +550,18 @@ func createShow(
 	var response createShowResponse
 
 	if err := json.Unmarshal(body, &response); err != nil {
-		return "", fmt.Errorf(
-			"decode show response: %w",
-			err,
-		)
+		return "",
+			fmt.Errorf(
+				"decode show response: %w",
+				err,
+			)
 	}
 
 	if response.ID == "" {
-		return "", errors.New(
-			"create show returned empty ID",
-		)
+		return "",
+			errors.New(
+				"create show returned empty ID",
+			)
 	}
 
 	return response.ID, nil
@@ -572,9 +581,6 @@ func reserveSeat(
 			Seats: []string{testSeat},
 
 			// Unique key per request.
-			//
-			// This test specifically measures hot-seat
-			// contention, not idempotency replay.
 			IdempotencyKey: fmt.Sprintf(
 				"burst-%s-%d",
 				userID,
@@ -585,7 +591,12 @@ func reserveSeat(
 
 	if err != nil {
 		return burstResult{
-			err: err,
+			err: fmt.Errorf(
+				"request %d (%s): encode request: %w",
+				requestID,
+				userID,
+				err,
+			),
 		}
 	}
 
@@ -604,17 +615,28 @@ func reserveSeat(
 
 	if err != nil {
 		return burstResult{
-			err: err,
+			err: fmt.Errorf(
+				"request %d (%s): %w",
+				requestID,
+				userID,
+				err,
+			),
 		}
 	}
 
 	defer resp.Body.Close()
 
 	body, err := io.ReadAll(resp.Body)
+
 	if err != nil {
 		return burstResult{
 			statusCode: resp.StatusCode,
-			err:        err,
+			err: fmt.Errorf(
+				"request %d (%s): read response: %w",
+				requestID,
+				userID,
+				err,
+			),
 		}
 	}
 
@@ -653,6 +675,7 @@ func getShow(
 	}
 
 	resp, err := client.Do(req)
+
 	if err != nil {
 		return nil, err
 	}
@@ -660,6 +683,7 @@ func getShow(
 	defer resp.Body.Close()
 
 	body, err := io.ReadAll(resp.Body)
+
 	if err != nil {
 		return nil, err
 	}
@@ -676,10 +700,11 @@ func getShow(
 	var response showResponse
 
 	if err := json.Unmarshal(body, &response); err != nil {
-		return nil, fmt.Errorf(
-			"decode show response: %w",
-			err,
-		)
+		return nil,
+			fmt.Errorf(
+				"decode show response: %w",
+				err,
+			)
 	}
 
 	return &response, nil
@@ -718,24 +743,20 @@ func postJSON(
 }
 
 func newHTTPClient(workers int) *http.Client {
-
 	transport := &http.Transport{
-		MaxIdleConns:        workers,
-		MaxIdleConnsPerHost: workers,
-		MaxConnsPerHost:     workers,
+		MaxIdleConns:        200,
+		MaxIdleConnsPerHost: 100,
+		MaxConnsPerHost:     100,
 
-		IdleConnTimeout: 30 * time.Second,
-
-		// Important for the 20k test.
-		//
-		// The server may legitimately take a while under
-		// extreme contention, so don't use a tiny timeout.
-		ResponseHeaderTimeout: 2 * time.Minute,
+		IdleConnTimeout:       90 * time.Second,
+		DisableKeepAlives:     false, 
+		ResponseHeaderTimeout: 60 * time.Second,
+		ForceAttemptHTTP2:     false,
 	}
 
 	return &http.Client{
 		Transport: transport,
-		Timeout:   3 * time.Minute,
+		Timeout:   90 * time.Second,
 	}
 }
 
@@ -845,7 +866,10 @@ func getPositiveEnv(
 }
 
 func trimTrailingSlash(value string) string {
-	for len(value) > 0 && value[len(value)-1] == '/' {
+
+	for len(value) > 0 &&
+		value[len(value)-1] == '/' {
+
 		value = value[:len(value)-1]
 	}
 
@@ -853,6 +877,12 @@ func trimTrailingSlash(value string) string {
 }
 
 func fatal(message string, err error) {
-	fmt.Printf("ERROR: %s: %v\n", message, err)
+
+	fmt.Printf(
+		"ERROR: %s: %v\n",
+		message,
+		err,
+	)
+
 	os.Exit(1)
 }
