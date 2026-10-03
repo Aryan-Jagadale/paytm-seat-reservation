@@ -47,19 +47,19 @@ func (s *ReservationService) Reserve(
 ) (*domain.ReserveResult, error) {
 
 	if strings.TrimSpace(req.ShowID) == "" {
-		return nil, fmt.Errorf("show_id is required")
+		return nil, fmt.Errorf("%w: show_id is required", domain.ErrInvalidReservationRequest)
 	}
 
 	if strings.TrimSpace(req.UserID) == "" {
-		return nil, fmt.Errorf("user identity is required")
+		return nil, fmt.Errorf("%w: user identity is required", domain.ErrInvalidReservationRequest)
 	}
 
 	if len(req.Seats) == 0 {
-		return nil, fmt.Errorf("at least one seat is required")
+		return nil, fmt.Errorf("%w: at least one seat is required", domain.ErrInvalidReservationRequest)
 	}
 
 	if strings.TrimSpace(req.IdempotencyKey) == "" {
-		return nil, fmt.Errorf("idempotency_key is required")
+		return nil, fmt.Errorf("%w: idempotency_key is required", domain.ErrInvalidReservationRequest)
 	}
 
 	seen := make(map[string]struct{}, len(req.Seats))
@@ -68,11 +68,11 @@ func (s *ReservationService) Reserve(
 		seat = strings.TrimSpace(seat)
 
 		if seat == "" {
-			return nil, fmt.Errorf("seat cannot be empty")
+			return nil, fmt.Errorf("%w: seat cannot be empty", domain.ErrInvalidReservationRequest)
 		}
 
 		if _, exists := seen[seat]; exists {
-			return nil, fmt.Errorf("duplicate seat: %s", seat)
+			return nil, fmt.Errorf("%w: duplicate seat: %s", domain.ErrInvalidReservationRequest, seat)
 		}
 
 		seen[seat] = struct{}{}

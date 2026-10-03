@@ -9,6 +9,8 @@ var (
 
 	ErrReservationNotFound = errors.New("reservation not found")
 	ErrNotReservationOwner = errors.New("user does not own reservation")
+
+	ErrInvalidReservationRequest = errors.New("invalid reservation request")
 )
 
 type Reservation struct {

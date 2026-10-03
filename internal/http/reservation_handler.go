@@ -77,6 +77,11 @@ func (h *ReservationHandler) Reserve(c *gin.Context) {
 
 	if err != nil {
 		switch {
+		case errors.Is(err, domain.ErrInvalidReservationRequest):
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error": err.Error(),
+			})
+
 		case errors.Is(err, domain.ErrSeatUnavailable):
 			h.metrics.ReservationsDeclined.
 				WithLabelValues("seat_taken").
@@ -145,8 +150,8 @@ func (h *ReservationHandler) Reserve(c *gin.Context) {
 				slog.String("error", err.Error()),
 			)
 
-			c.JSON(http.StatusBadRequest, gin.H{
-				"error": err.Error(),
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"error": "internal server error",
 			})
 		}
 
@@ -249,8 +254,8 @@ func (h *ReservationHandler) Cancel(c *gin.Context) {
 				slog.String("error", err.Error()),
 			)
 
-			c.JSON(http.StatusConflict, gin.H{
-				"error": err.Error(),
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"error": "internal server error",
 			})
 		}
 
