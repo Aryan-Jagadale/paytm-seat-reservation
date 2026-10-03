@@ -36,6 +36,8 @@ func NewRouter(ready ReadyChecker, logger *slog.Logger, showHandler *ShowHandler
 	protected := router.Group("")
 	protected.Use(middleware.Authentication(authenticator))
 
+	devAuthHandler := NewDevAuthHandler(authenticator)
+
 	handler := &Handler{
 		ready:  ready,
 		logger: logger,
@@ -43,6 +45,7 @@ func NewRouter(ready ReadyChecker, logger *slog.Logger, showHandler *ShowHandler
 
 	router.GET("/healthz", handler.Liveness)
 	router.GET("/readyz", handler.Readiness)
+	router.POST("/dev/token", devAuthHandler.GenerateToken)
 
 	router.POST("/shows", showHandler.CreateShow)
 	router.GET("/shows/:id", showHandler.GetShow)

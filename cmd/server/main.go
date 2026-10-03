@@ -56,6 +56,10 @@ func run() error {
 	}
 	defer pool.Close()
 
+	if err := db.RunMigrations(startupCtx, pool); err != nil {
+		return fmt.Errorf("run database migrations: %w", err)
+	}
+
 	showRepo := repository.NewShowRepository(pool)
 	appMetrics := metrics.New()
 

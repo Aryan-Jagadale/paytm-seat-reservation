@@ -84,3 +84,6 @@ func GenerateToken(secret string, userID string) (string, error) {
 	return token.SignedString([]byte(secret))
 }
 
+func (a *JWTAuthenticator) GenerateToken(userID string) (string, error) {
+	return GenerateToken(string(a.secret), userID)
+}

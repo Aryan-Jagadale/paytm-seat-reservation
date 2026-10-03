@@ -1,28 +1,33 @@
-FROM golang:1.27.1-alpine AS builder
+# ---------- Build stage ----------
+FROM golang:1.27-alpine AS builder
 
-WORKDIR /src
+WORKDIR /app
 
-RUN apk add --no-cache ca-certificates
-
+# Download dependencies first.
+# This layer is cached unless go.mod/go.sum changes.
 COPY go.mod go.sum ./
 RUN go mod download
 
+# Copy application source
 COPY . .
 
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
-    go build \
-    -trimpath \
-    -ldflags="-s -w" \
-    -o /out/server ./cmd/server
+# Build a static Linux binary
+RUN CGO_ENABLED=0 GOOS=linux go build \
+    -o /app/server \
+    ./cmd/server
 
-FROM gcr.io/distroless/static-debian13:nonroot
 
-WORKDIR /
+# ---------- Runtime stage ----------
+FROM alpine:3.22
 
-COPY --from=builder /out/server /server
+WORKDIR /app
+
+# Add CA certificates for HTTPS connections.
+RUN apk add --no-cache ca-certificates
+
+COPY --from=builder /app/server /app/server
+COPY migrations /app/migrations
 
 EXPOSE 8080
 
-USER nonroot:nonroot
-
-ENTRYPOINT ["/server"]
+CMD ["/app/server"]

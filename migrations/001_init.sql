@@ -1,6 +1,6 @@
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
-CREATE TABLE shows (
+CREATE TABLE IF NOT EXISTS shows (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     name TEXT NOT NULL,
     price_paise BIGINT NOT NULL CHECK (price_paise >= 0),
@@ -8,7 +8,7 @@ CREATE TABLE shows (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE TABLE seats (
+CREATE TABLE IF NOT EXISTS seats (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     show_id UUID NOT NULL REFERENCES shows(id) ON DELETE CASCADE,
     seat_number TEXT NOT NULL,
@@ -19,9 +19,9 @@ CREATE TABLE seats (
     UNIQUE (show_id, seat_number)
 );
 
-CREATE INDEX idx_seats_show_id ON seats(show_id);
+CREATE INDEX IF NOT EXISTS idx_seats_show_id ON seats(show_id);
 
-CREATE TABLE reservations (
+CREATE TABLE IF NOT EXISTS reservations (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     show_id UUID NOT NULL REFERENCES shows(id),
     user_id TEXT NOT NULL,
@@ -35,13 +35,13 @@ CREATE TABLE reservations (
     UNIQUE (show_id, user_id, idempotency_key)
 );
 
-CREATE TABLE reservation_seats (
+CREATE TABLE IF NOT EXISTS reservation_seats (
     reservation_id UUID NOT NULL REFERENCES reservations(id) ON DELETE CASCADE,
     seat_id UUID NOT NULL REFERENCES seats(id),
     PRIMARY KEY (reservation_id, seat_id)
 );
 
-CREATE TABLE show_user_limits (
+CREATE TABLE IF NOT EXISTS show_user_limits (
     show_id UUID NOT NULL REFERENCES shows(id) ON DELETE CASCADE,
     user_id TEXT NOT NULL,
     reserved_count INT NOT NULL DEFAULT 0 CHECK (reserved_count >= 0),
